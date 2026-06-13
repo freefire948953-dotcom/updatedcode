@@ -1,12 +1,12 @@
 // config.js
 module.exports = {
   token: process.env.DISCORD_TOKEN,
-  prefix: ",",
+  prefix: "/",
   enablePrefix: true,
   supportServer: "https://discord.gg/c2h",
 
   activity: {
-    name: "$help",
+    name: "/help",
     type: "LISTENING" // PLAYING, LISTENING, WATCHING, STREAMING, COMPETING
   },
 
