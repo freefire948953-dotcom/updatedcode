@@ -408,7 +408,7 @@ function createHelpContainer() {
           new TextDisplayBuilder().setContent(
             `## ${client.user.username} — Help Menu\n` +
             `A powerful music bot with high quality audio\n` +
-            `**Lavalink:** ${lavalinkStatus} | Made by **Susmita OP**\n\n` +
+            `**Lavalink:** ${lavalinkStatus} | Made by **SKY x LIVE**\n\n` +
             `**🎵 Music Commands**\n` +
             `\`/play\` — Play a song or playlist\n` +
             `\`/pause\` — Pause current song\n` +
