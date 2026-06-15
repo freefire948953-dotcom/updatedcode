@@ -71,7 +71,8 @@ const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildVoiceStates,
-    GatewayIntentBits.GuildMessages
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent
   ],
   allowedMentions: { parse: [] }
 });
@@ -1323,6 +1324,220 @@ client.on('interactionCreate', async (interaction) => {
     const errPayload = { content: '❌ An error occurred', ephemeral: true };
     if (interaction.deferred)       await interaction.editReply(errPayload).catch(() => {});
     else if (!interaction.replied)  await interaction.reply(errPayload).catch(() => {});
+  }
+});
+
+// ══════════════════════════════════════════════════════════════════
+//  MENTION COMMANDS — @BOT join/leave/skip/previous/play
+// ══════════════════════════════════════════════════════════════════
+
+client.on('messageCreate', async (message) => {
+  if (message.author.bot || !message.guild) return;
+
+  // Must mention the bot
+  const mentionRegex = new RegExp(`^<@!?${client.user.id}>\\s*`);
+  if (!mentionRegex.test(message.content.trim())) return;
+
+  const args    = message.content.trim().replace(mentionRegex, '').trim().split(/\s+/);
+  const command = args[0]?.toLowerCase();
+  const rest    = args.slice(1).join(' ').trim();
+
+  // Helper: quick reply with Components V2 simple container
+  const reply = (title, desc, emoji = '✅') =>
+    message.reply({
+      components: [createSimpleContainer(title, desc, emoji)],
+      flags: MessageFlags.IsComponentsV2
+    }).catch(() => {});
+
+  try {
+    // ── join ────────────────────────────────────────────────────
+    if (command === 'join') {
+      if (!message.member.voice.channel) {
+        return reply('Error', 'You need to be in a voice channel first!', '❌');
+      }
+      let player = riffy.players.get(message.guild.id);
+      if (player) {
+        return reply('Already Connected', `Already in <#${player.voiceChannel}>`, 'ℹ️');
+      }
+      player = riffy.createConnection({
+        guildId:      message.guild.id,
+        voiceChannel: message.member.voice.channel.id,
+        textChannel:  message.channel.id,
+        deaf: true
+      });
+      return reply('Joined', `Connected to **${message.member.voice.channel.name}** 🎤`);
+    }
+
+    // ── leave ───────────────────────────────────────────────────
+    if (command === 'leave' || command === 'disconnect' || command === 'dc') {
+      const player = riffy.players.get(message.guild.id);
+      if (!player) return reply('Error', 'Not connected to any voice channel.', '❌');
+      nowPlayingMsgs.delete(message.guild.id);
+      queue247.delete(message.guild.id);
+      player.destroy();
+      return reply('Left', 'Disconnected from voice channel 👋');
+    }
+
+    // ── skip ────────────────────────────────────────────────────
+    if (command === 'skip' || command === 's') {
+      const player = riffy.players.get(message.guild.id);
+      if (!player) return reply('Error', 'Nothing is playing.', '❌');
+      if (!message.member.voice.channel || message.member.voice.channel.id !== player.voiceChannel) {
+        return reply('Error', 'Join the same voice channel as the bot!', '❌');
+      }
+      if (!hasDJPermission(message.member, message.guild.id)) {
+        return reply('Error', 'You need the DJ role to skip!', '❌');
+      }
+      if (!player.current) return reply('Error', 'Nothing is playing.', '❌');
+      player.stop();
+      return reply('Skipped', 'Skipped to next track ⏭️');
+    }
+
+    // ── previous ────────────────────────────────────────────────
+    if (command === 'previous' || command === 'prev' || command === 'back') {
+      const player = riffy.players.get(message.guild.id);
+      if (!player) return reply('Error', 'Nothing is playing.', '❌');
+      if (!message.member.voice.channel || message.member.voice.channel.id !== player.voiceChannel) {
+        return reply('Error', 'Join the same voice channel as the bot!', '❌');
+      }
+
+      const hist = songHistory.get(message.guild.id) ?? [];
+      // hist[0] is current song, hist[1] is previous
+      const prevTrack = hist[1];
+      if (!prevTrack) {
+        return reply('No History', 'No previous song found in history.', 'ℹ️');
+      }
+
+      // Re-resolve the previous track and play it next
+      try {
+        const result = await resolveWithFallback(
+          prevTrack.info.uri || prevTrack.info.title,
+          message.author.id
+        );
+        if (result?.tracks?.length) {
+          const track = result.tracks[0];
+          track.info.requester = prevTrack.info.requester ?? message.author.id;
+          // Add to front of queue then skip current
+          player.queue.unshift(track);
+          player.stop();
+          return reply('Previous', `Playing previous track: **[${prevTrack.info.title}](${prevTrack.info.uri})**`, '⏮️');
+        }
+      } catch (e) { console.error('Previous track resolve error:', e); }
+      return reply('Error', 'Could not load previous track.', '❌');
+    }
+
+    // ── pause ───────────────────────────────────────────────────
+    if (command === 'pause' || command === 'pa') {
+      const player = riffy.players.get(message.guild.id);
+      if (!player?.current) return reply('Error', 'Nothing is playing.', '❌');
+      player.pause(true);
+      return reply('Paused', 'Playback paused ⏸️');
+    }
+
+    // ── resume ──────────────────────────────────────────────────
+    if (command === 'resume' || command === 'r') {
+      const player = riffy.players.get(message.guild.id);
+      if (!player) return reply('Error', 'Nothing is playing.', '❌');
+      player.pause(false);
+      return reply('Resumed', 'Playback resumed ▶️');
+    }
+
+    // ── stop ────────────────────────────────────────────────────
+    if (command === 'stop' || command === 'st') {
+      const player = riffy.players.get(message.guild.id);
+      if (!player) return reply('Error', 'Nothing is playing.', '❌');
+      if (!hasDJPermission(message.member, message.guild.id)) {
+        return reply('Error', 'You need the DJ role to stop!', '❌');
+      }
+      nowPlayingMsgs.delete(message.guild.id);
+      player.destroy();
+      return reply('Stopped', 'Stopped and cleared queue ⏹️');
+    }
+
+    // ── np / nowplaying ─────────────────────────────────────────
+    if (command === 'np' || command === 'nowplaying') {
+      const player = riffy.players.get(message.guild.id);
+      if (!player?.current) return reply('Error', 'Nothing is playing.', '❌');
+      return message.reply({
+        components: [createNowPlayingContainer(player, player.current)],
+        flags: MessageFlags.IsComponentsV2 | MessageFlags.IsPersistent
+      }).catch(() => {});
+    }
+
+    // ── queue ───────────────────────────────────────────────────
+    if (command === 'queue' || command === 'q') {
+      const player = riffy.players.get(message.guild.id);
+      if (!player) return reply('Error', 'Nothing is playing.', '❌');
+      return message.reply({
+        components: [createQueueContainer(player)],
+        flags: MessageFlags.IsComponentsV2 | MessageFlags.IsPersistent
+      }).catch(() => {});
+    }
+
+    // ── play ────────────────────────────────────────────────────
+    if (command === 'play' || command === 'p' || !command) {
+      const query = rest || (command !== 'play' && command !== 'p' ? args.join(' ') : '');
+      if (!query) {
+        return reply('Usage', '`@SKY x MUSIC play <song name or URL>`', 'ℹ️');
+      }
+      if (!message.member.voice.channel) {
+        return reply('Error', 'You need to be in a voice channel first!', '❌');
+      }
+
+      const sent = await message.reply({
+        components: [createSimpleContainer('Searching', `🔍 Looking for **${query}**...`, 'ℹ️')],
+        flags: MessageFlags.IsComponentsV2
+      }).catch(() => null);
+
+      const editReply = async (data) => {
+        if (!sent) return;
+        if (typeof data === 'string') {
+          return sent.edit({ content: data, components: [] }).catch(() => {});
+        }
+        return sent.edit({ content: '', ...data }).catch(() => {});
+      };
+
+      await handlePlay(
+        message.guild.id,
+        message.member.voice.channel.id,
+        message.channel.id,
+        query,
+        message.author.id,
+        async (msg) => {
+          if (!sent) return;
+          if (typeof msg === 'string') return sent.edit({ content: msg, components: [] }).catch(() => {});
+          return sent.edit({ content: '', ...msg }).catch(() => {});
+        },
+        editReply
+      );
+      return;
+    }
+
+    // ── help ────────────────────────────────────────────────────
+    if (command === 'help' || command === 'h') {
+      return message.reply({
+        components: [createSimpleContainer(
+          'Mention Commands',
+          `**@${client.user.username} join** — Join your voice channel\n` +
+          `**@${client.user.username} leave** — Leave voice channel\n` +
+          `**@${client.user.username} play <song>** — Play a song\n` +
+          `**@${client.user.username} skip** — Skip current song\n` +
+          `**@${client.user.username} previous** — Play previous song\n` +
+          `**@${client.user.username} pause** — Pause playback\n` +
+          `**@${client.user.username} resume** — Resume playback\n` +
+          `**@${client.user.username} stop** — Stop and clear queue\n` +
+          `**@${client.user.username} np** — Now playing\n` +
+          `**@${client.user.username} queue** — Show queue\n\n` +
+          `💡 Use \`/help\` for all slash commands!`,
+          'ℹ️'
+        )],
+        flags: MessageFlags.IsComponentsV2
+      }).catch(() => {});
+    }
+
+  } catch (err) {
+    console.error('[Mention Command Error]', err);
+    message.reply(`❌ Something went wrong: ${err.message}`).catch(() => {});
   }
 });
 
