@@ -823,8 +823,12 @@ client.on('ready', async () => {
 });
 
 client.on('raw', (d) => {
-  try { riffy.updateVoiceState(d); }
-  catch (err) { console.error('raw event error:', err.message); }
+  try {
+    if (!d || !['VOICE_STATE_UPDATE', 'VOICE_SERVER_UPDATE'].includes(d.t)) return;
+    riffy.updateVoiceState(d);
+  } catch (err) {
+    console.error('raw event error:', err.message);
+  }
 });
 
 // ══════════════════════════════════════════════════════════════════
