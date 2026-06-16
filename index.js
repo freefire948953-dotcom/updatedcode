@@ -1,72 +1,43 @@
-// ╔══════════════════════════════════════════════════════════════╗
-// ║           SKY x MUSIC BOT — index.js                        ║
-// ║  Features: Play, Queue, Loop, Shuffle, Volume, 24/7,        ║
-// ║            Autoplay, Spotify, Lyrics, DJ Role,              ║
-// ║            Song History, Vote Skip, Components V2 UI        ║
-// ╚══════════════════════════════════════════════════════════════╝
+// ╔══════════════════════════════════════════════════════════════════════╗
+// ║              SKY x MUSIC BOT — index.js  v2.0                      ║
+// ║  Platforms : YouTube · Spotify · SoundCloud · Apple Music          ║
+// ║  Features  : Audio Filters · 8D Audio · Bass Boost · Nightcore     ║
+// ║              Queue · Loop · Shuffle · 24/7 · Autoplay              ║
+// ║              DJ Role · Vote Skip · Lyrics · History                ║
+// ║  UI        : Components V2 — Clean & Modern                        ║
+// ╚══════════════════════════════════════════════════════════════════════╝
+
+'use strict';
 
 const {
   Client, GatewayIntentBits, ActivityType,
-  EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle,
+  ActionRowBuilder, ButtonBuilder, ButtonStyle,
   ContainerBuilder, SectionBuilder, TextDisplayBuilder,
   ThumbnailBuilder, SeparatorBuilder, SeparatorSpacingSize, MessageFlags
 } = require('discord.js');
 const { Riffy } = require('riffy');
-const config = require('./config.js');
+const config  = require('./config.js');
 const express = require('express');
 require('dotenv').config();
 
-// ─── Global error handlers ─────────────────────────────────────────────────────
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-});
-process.on('uncaughtException', (err) => {
-  console.error('Uncaught Exception:', err);
-});
+// ─── Global error safety ──────────────────────────────────────────────────────
+process.on('unhandledRejection', (r) => console.error('[UnhandledRejection]', r));
+process.on('uncaughtException',  (e) => console.error('[UncaughtException]',  e));
 
-// ─── Spotify Integration ───────────────────────────────────────────────────────
+// ─── Spotify ──────────────────────────────────────────────────────────────────
 const spotifyModule = require('./spotify');
 const SpotifyClient = require('spotify-url-info');
-const fetch = (...args) => import('node-fetch').then(({ default: f }) => f(...args));
+const fetch = (...a) => import('node-fetch').then(({ default: f }) => f(...a));
 spotifyModule.init({ spotifyClient: SpotifyClient(fetch) });
 
-// ─── Lyrics (genius-lyrics) ────────────────────────────────────────────────────
-let Genius = null;
+// ─── Lyrics ───────────────────────────────────────────────────────────────────
 let geniusClient = null;
 try {
-  Genius = require('genius-lyrics');
+  const Genius = require('genius-lyrics');
   geniusClient = new Genius.Client();
-} catch (_) {
-  console.warn('⚠️  genius-lyrics not installed — /lyrics will be unavailable');
-}
+} catch (_) { console.warn('⚠️  genius-lyrics not installed'); }
 
-// ─── Express Keep-Alive ────────────────────────────────────────────────────────
-function startExpressServer() {
-  if (!config.express?.enabled) return;
-  const app = express();
-  app.get('/', (req, res) => res.json({
-    status: 'online',
-    bot: client.user?.tag ?? 'Starting...',
-    servers: client.guilds.cache.size,
-    uptime: process.uptime(),
-    lavalink: isLavalinkConnected ? 'connected' : 'disconnected'
-  }));
-  app.get('/stats', (req, res) => res.json({
-    guilds: client.guilds.cache.size,
-    users: client.guilds.cache.reduce((a, g) => a + g.memberCount, 0),
-    players: riffy.players?.size ?? 0,
-    uptime: process.uptime(),
-    memory: (process.memoryUsage().heapUsed / 1024 / 1024).toFixed(2),
-    ping: client.ws?.ping ?? 0,
-    lavalink: isLavalinkConnected
-  }));
-  app.listen(config.express.port, '0.0.0.0', () =>
-    console.log(`🌐 Express running on port ${config.express.port}`)
-  );
-}
-startExpressServer();
-
-// ─── Discord Client ────────────────────────────────────────────────────────────
+// ─── Discord Client ───────────────────────────────────────────────────────────
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -85,23 +56,153 @@ const riffy = new Riffy(client, config.lavalink.nodes, {
       if (!payload?.d?.guild_id) return;
       const guild = client.guilds.cache.get(payload.d.guild_id);
       if (guild) guild.shard.send(payload);
-    } catch (err) {
-      console.error('Riffy send error:', err);
-    }
+    } catch (e) { console.error('[Riffy Send]', e.message); }
   },
   defaultSearchPlatform: 'ytmsearch',
   restVersion: 'v4'
 });
 
-// ─── State Maps ────────────────────────────────────────────────────────────────
-const queue247        = new Set();          // guildIds with 24/7 on
-const autoplayEnabled = new Set();          // guildIds with autoplay on
-const djRoles         = new Map();          // guildId → roleId
-const nowPlayingMsgs  = new Map();          // guildId → Message
-const songHistory     = new Map();          // guildId → Track[]   (max 20)
-const voteSkips       = new Map();          // guildId → Set<userId>
+// ─── Express Keep-Alive ───────────────────────────────────────────────────────
+function startExpressServer() {
+  if (!config.express?.enabled) return;
+  const app = express();
+  app.get('/', (_req, res) => res.json({
+    status: 'online', bot: client.user?.tag ?? 'Starting...',
+    servers: client.guilds.cache.size, uptime: process.uptime(),
+    lavalink: isLavalinkConnected ? 'connected' : 'disconnected'
+  }));
+  app.get('/stats', (_req, res) => res.json({
+    guilds: client.guilds.cache.size,
+    users: client.guilds.cache.reduce((a, g) => a + g.memberCount, 0),
+    players: riffy.players?.size ?? 0, uptime: process.uptime(),
+    memory: (process.memoryUsage().heapUsed / 1024 / 1024).toFixed(2),
+    ping: client.ws?.ping ?? 0, lavalink: isLavalinkConnected
+  }));
+  app.listen(config.express.port, '0.0.0.0', () =>
+    console.log(`🌐 Express on port ${config.express.port}`)
+  );
+}
+startExpressServer();
 
-// ─── Helpers ───────────────────────────────────────────────────────────────────
+// ─── State ────────────────────────────────────────────────────────────────────
+const queue247        = new Set();   // guildId
+const autoplayEnabled = new Set();   // guildId
+const djRoles         = new Map();   // guildId → roleId
+const nowPlayingMsgs  = new Map();   // guildId → Message
+const songHistory     = new Map();   // guildId → Track[]
+const voteSkips       = new Map();   // guildId → Set<userId>
+const activeFilters   = new Map();   // guildId → Set<filterName>
+
+// ─── Audio Filters ────────────────────────────────────────────────────────────
+// Each filter is a Lavalink equalizer/plugin payload
+const FILTERS = {
+  bassboost: {
+    equalizer: [
+      { band: 0, gain: 0.6 }, { band: 1, gain: 0.7 },
+      { band: 2, gain: 0.5 }, { band: 3, gain: 0.25 },
+      { band: 4, gain: 0.0 }, { band: 5, gain: -0.25 },
+      { band: 6, gain: -0.45 }, { band: 7, gain: -0.55 },
+      { band: 8, gain: -0.6 }, { band: 9, gain: -0.65 },
+      { band: 10, gain: -0.6 }, { band: 11, gain: -0.55 },
+      { band: 12, gain: 0.0 }, { band: 13, gain: 0.45 }, { band: 14, gain: 0.55 }
+    ]
+  },
+  nightcore: {
+    timescale: { speed: 1.3, pitch: 1.3, rate: 1.0 }
+  },
+  vaporwave: {
+    timescale: { speed: 0.8, pitch: 0.8, rate: 1.0 },
+    equalizer: [
+      { band: 1, gain: 0.3 }, { band: 0, gain: 0.3 }
+    ]
+  },
+  '8d': {
+    rotation: { rotationHz: 0.2 }
+  },
+  slowedreverb: {
+    timescale: { speed: 0.8, pitch: 0.9, rate: 1.0 },
+    reverb: { roomSize: 0.8, damping: 0.5, wet: 0.5, dry: 0.8 }
+  },
+  treble: {
+    equalizer: [
+      { band: 12, gain: 0.6 }, { band: 13, gain: 0.65 }, { band: 14, gain: 0.7 }
+    ]
+  },
+  pop: {
+    equalizer: [
+      { band: 0, gain: 0.0 }, { band: 1, gain: 0.0 }, { band: 2, gain: 0.05 },
+      { band: 3, gain: 0.1 }, { band: 4, gain: 0.1 }, { band: 5, gain: 0.1 },
+      { band: 6, gain: 0.05 }, { band: 7, gain: 0.0 }, { band: 8, gain: 0.0 },
+      { band: 9, gain: 0.0 }, { band: 10, gain: 0.0 }, { band: 11, gain: 0.0 },
+      { band: 12, gain: 0.0 }, { band: 13, gain: 0.0 }, { band: 14, gain: 0.0 }
+    ]
+  },
+  soft: {
+    lowPass: { smoothing: 20.0 }
+  },
+  loud: {
+    equalizer: Array.from({ length: 15 }, (_, i) => ({ band: i, gain: 0.5 }))
+  },
+  earrape: {
+    equalizer: Array.from({ length: 15 }, (_, i) => ({ band: i, gain: 1.0 })),
+    timescale: { speed: 1.0, pitch: 1.2, rate: 1.0 }
+  },
+  karaoke: {
+    karaoke: { level: 1.0, monoLevel: 1.0, filterBand: 220.0, filterWidth: 100.0 }
+  },
+  distortion: {
+    distortion: {
+      sinOffset: 0, sinScale: 1, cosOffset: 0, cosScale: 1,
+      tanOffset: 0, tanScale: 1, offset: 0, scale: 1.0
+    }
+  },
+  china: {
+    timescale: { speed: 0.75, pitch: 1.25, rate: 1.25 }
+  },
+  chipmunk: {
+    timescale: { speed: 1.05, pitch: 1.35, rate: 1.25 }
+  },
+  vibrato: {
+    vibrato: { frequency: 4.0, depth: 0.75 }
+  }
+};
+
+const FILTER_NAMES = Object.keys(FILTERS);
+
+// Apply a filter to a Lavalink player via REST
+async function applyFilter(player, filterName) {
+  const filter = FILTERS[filterName];
+  if (!filter) return false;
+  try {
+    // Riffy exposes node.rest for direct REST calls
+    const node = player.node;
+    if (!node) return false;
+    await node.rest.updatePlayer({
+      guildId: player.guildId,
+      data: { filters: filter }
+    });
+    return true;
+  } catch (e) {
+    console.error(`[Filter:${filterName}]`, e.message);
+    return false;
+  }
+}
+
+async function clearFilters(player) {
+  try {
+    const node = player.node;
+    if (!node) return;
+    await node.rest.updatePlayer({
+      guildId: player.guildId,
+      data: { filters: {} }
+    });
+    activeFilters.delete(player.guildId);
+  } catch (e) {
+    console.error('[ClearFilters]', e.message);
+  }
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 function formatTime(ms) {
   if (!ms || isNaN(ms)) return '0:00';
   const s = Math.floor((ms / 1000) % 60);
@@ -117,26 +218,33 @@ function resolveThumbnail(info) {
   if (info.thumbnail)  return info.thumbnail;
   const uri = info.uri || '';
   let vid = null;
-  if (uri.includes('youtube.com'))  vid = uri.split('v=')[1]?.split('&')[0];
+  if (uri.includes('youtube.com'))   vid = uri.split('v=')[1]?.split('&')[0];
   else if (uri.includes('youtu.be')) vid = uri.split('youtu.be/')[1]?.split('?')[0];
   return vid
     ? `https://img.youtube.com/vi/${vid}/maxresdefault.jpg`
     : 'https://i.imgur.com/QYJfXQv.png';
 }
 
+function detectSource(info) {
+  const uri = (info?.uri || '').toLowerCase();
+  if (uri.includes('spotify.com'))     return { name: 'Spotify',      emoji: '🟢' };
+  if (uri.includes('soundcloud.com'))  return { name: 'SoundCloud',   emoji: '🟠' };
+  if (uri.includes('music.apple.com')) return { name: 'Apple Music',  emoji: '🍎' };
+  if (uri.includes('youtube.com') || uri.includes('youtu.be'))
+                                       return { name: 'YouTube',      emoji: '🔴' };
+  if (uri.includes('deezer.com'))      return { name: 'Deezer',       emoji: '💜' };
+  if (uri.includes('twitch.tv'))       return { name: 'Twitch',       emoji: '🟣' };
+  return { name: 'Unknown', emoji: '🎵' };
+}
+
 function pushHistory(guildId, track) {
   if (!songHistory.has(guildId)) songHistory.set(guildId, []);
   const hist = songHistory.get(guildId);
-  // avoid duplicates at top
   if (hist[0]?.info?.uri === track.info?.uri) return;
   hist.unshift(track);
   if (hist.length > 20) hist.pop();
 }
 
-/**
- * Check if a member is allowed to use music controls.
- * Allowed if: no DJ role set for guild  OR  member has the DJ role  OR  member is admin.
- */
 function hasDJPermission(member, guildId) {
   const roleId = djRoles.get(guildId);
   if (!roleId) return true;
@@ -144,39 +252,58 @@ function hasDJPermission(member, guildId) {
   return member.roles.cache.has(roleId);
 }
 
-// ─── Fallback resolver ─────────────────────────────────────────────────────────
+// ─── Voice ready guard ────────────────────────────────────────────────────────
+// FIX: Waits for both VOICE_STATE_UPDATE + VOICE_SERVER_UPDATE before returning.
+// This prevents "Player connection is not initiated" error.
+function waitForPlayerReady(guildId, timeoutMs = 6000) {
+  return new Promise((resolve) => {
+    let vsUpdate = false, serverUpdate = false;
+    const done = () => {
+      if (vsUpdate && serverUpdate) {
+        client.removeListener('raw', onRaw);
+        resolve(true);
+      }
+    };
+    const onRaw = (d) => {
+      if (!d) return;
+      if (d.t === 'VOICE_STATE_UPDATE'  && d.d?.guild_id === guildId) { vsUpdate     = true; done(); }
+      if (d.t === 'VOICE_SERVER_UPDATE' && d.d?.guild_id === guildId) { serverUpdate = true; done(); }
+    };
+    client.on('raw', onRaw);
+    setTimeout(() => { client.removeListener('raw', onRaw); resolve(false); }, timeoutMs);
+  });
+}
+
+// ─── Multi-platform fallback resolver ────────────────────────────────────────
 async function resolveWithFallback(query, requesterId) {
   const isUrl = /^https?:\/\//i.test(query);
   if (isUrl) {
     try {
       const r = await riffy.resolve({ query, requester: requesterId });
       if (r?.tracks?.length) return r;
-    } catch (e) { console.error('Direct URL resolve error:', e.message); }
+    } catch (e) { console.error('[URL Resolve]', e.message); }
   }
   for (const platform of ['ytmsearch', 'ytsearch', 'scsearch']) {
     try {
       const q = isUrl ? query : `${platform}:${query}`;
       const r = await riffy.resolve({ query: q, requester: requesterId });
       if (r?.tracks?.length) { console.log(`✅ Found on ${platform}`); return r; }
-    } catch (e) { console.error(`❌ ${platform}:`, e.message); }
+    } catch (e) { console.error(`[${platform}]`, e.message); }
   }
   return null;
 }
 
-// ─── Spotify → Riffy adapter ───────────────────────────────────────────────────
+// ─── Spotify adapter ──────────────────────────────────────────────────────────
 function makeSpotifyAdapter(guildId, voiceChannelId, textChannelId, requesterId) {
   return {
-    getQueue: (gId) => {
-      const p = riffy.players.get(gId);
-      return p ? p.queue : [];
-    },
+    getQueue: (gId) => riffy.players.get(gId)?.queue ?? [],
     enqueue: async (gId, items) => {
       let player = riffy.players.get(gId);
       if (!player) {
         player = riffy.createConnection({ guildId, voiceChannel: voiceChannelId, textChannel: textChannelId, deaf: true });
+        await waitForPlayerReady(guildId);
       }
-      const trackArray = Array.isArray(items) ? items : [items];
-      for (const item of trackArray) {
+      for (const item of (Array.isArray(items) ? items : [items])) {
         try {
           const result = await riffy.resolve({ query: `ytmsearch:${item.search}`, requester: requesterId });
           if (result?.tracks?.length) {
@@ -184,7 +311,7 @@ function makeSpotifyAdapter(guildId, voiceChannelId, textChannelId, requesterId)
             track.info.requester = requesterId;
             player.queue.add(track);
           }
-        } catch (e) { console.error(`Spotify track fail: ${item.title}`, e.message); }
+        } catch (e) { console.error(`[Spotify Track]`, e.message); }
       }
       if (!player.playing && !player.paused) player.play();
     },
@@ -192,16 +319,25 @@ function makeSpotifyAdapter(guildId, voiceChannelId, textChannelId, requesterId)
   };
 }
 
-// ══════════════════════════════════════════════════════════════════
-//  UI BUILDERS — Components V2
-// ══════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════════
+//  UI BUILDERS — Clean & Modern Components V2
+// ══════════════════════════════════════════════════════════════════════════════
 
+// ── Colour-coded source badge ──────────────────────────────────────────────────
+function sourceBadge(info) {
+  const src = detectSource(info);
+  return `${src.emoji} **${src.name}**`;
+}
+
+// ── Now Playing ───────────────────────────────────────────────────────────────
 function createNowPlayingContainer(player, track, disabled = false) {
-  const info = track.info ?? {};
-  const thumb = resolveThumbnail(info);
-  const isPaused = player.paused;
-  const loopEmoji = player.loop === 'track' ? '🔂' : player.loop === 'queue' ? '🔁' : '➡️';
-  const votes = voteSkips.get(player.guildId)?.size ?? 0;
+  const info      = track.info ?? {};
+  const thumb     = resolveThumbnail(info);
+  const isPaused  = player.paused;
+  const loopEmoji = player.loop === 'track' ? '🔂' : player.loop === 'queue' ? '🔁' : '▶️';
+  const votes     = voteSkips.get(player.guildId)?.size ?? 0;
+  const fSet      = activeFilters.get(player.guildId) ?? new Set();
+  const filterStr = fSet.size > 0 ? [...fSet].map(f => `\`${f}\``).join(' ') : '`none`';
 
   return new ContainerBuilder()
     .addSectionComponents(
@@ -209,23 +345,26 @@ function createNowPlayingContainer(player, track, disabled = false) {
         .addTextDisplayComponents(
           new TextDisplayBuilder().setContent(
             `## 🎵 Now Playing\n` +
-            `**[${info.title ?? 'Unknown Title'}](${info.uri ?? 'https://youtube.com'})**\n` +
-            `👤 **${info.author ?? 'Unknown'}**`
+            `### [${info.title ?? 'Unknown Title'}](${info.uri ?? 'https://youtube.com'})\n` +
+            `👤 ${info.author ?? 'Unknown Artist'}  •  ${sourceBadge(info)}`
           )
         )
         .setThumbnailAccessory(
-          new ThumbnailBuilder().setURL(thumb).setDescription(info.title ?? 'Thumbnail')
+          new ThumbnailBuilder().setURL(thumb).setDescription(info.title ?? 'Cover')
         )
     )
+    .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
     .addTextDisplayComponents(
       new TextDisplayBuilder().setContent(
-        `⏱️ **Duration:** ${formatTime(info.length)} • ` +
-        `${loopEmoji} **Loop:** ${player.loop ?? 'none'} • ` +
-        `🔊 **Volume:** ${player.volume ?? 100}%\n` +
-        `🙋 **Requested By:** <@${info.requester}>`
+        `⏱️ \`${formatTime(info.length)}\`  •  ` +
+        `${loopEmoji} Loop: \`${player.loop ?? 'none'}\`  •  ` +
+        `🔊 Volume: \`${player.volume ?? 100}%\`\n` +
+        `🎛️ Filters: ${filterStr}\n` +
+        `🙋 Requested by <@${info.requester}>`
       )
     )
     .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
+    // Row 1 — Playback controls
     .addActionRowComponents(
       new ActionRowBuilder().addComponents(
         new ButtonBuilder()
@@ -233,65 +372,34 @@ function createNowPlayingContainer(player, track, disabled = false) {
           .setEmoji(isPaused ? '▶️' : '⏸️')
           .setStyle(isPaused ? ButtonStyle.Success : ButtonStyle.Primary)
           .setDisabled(disabled),
+        new ButtonBuilder().setCustomId('skip').setEmoji('⏭️').setStyle(ButtonStyle.Primary).setDisabled(disabled),
         new ButtonBuilder()
-          .setCustomId('skip')
-          .setEmoji('⏭️')
-          .setStyle(ButtonStyle.Primary)
-          .setDisabled(disabled),
-        new ButtonBuilder()
-          .setCustomId('voteskip')
-          .setLabel(`Vote Skip${votes > 0 ? ` (${votes})` : ''}`)
-          .setEmoji('🗳️')
-          .setStyle(ButtonStyle.Secondary)
-          .setDisabled(disabled),
-        new ButtonBuilder()
-          .setCustomId('stop')
-          .setEmoji('⏹️')
-          .setStyle(ButtonStyle.Danger)
-          .setDisabled(disabled),
-        new ButtonBuilder()
-          .setCustomId('shuffle')
-          .setEmoji('🔀')
-          .setStyle(ButtonStyle.Secondary)
-          .setDisabled(disabled)
+          .setCustomId('voteskip').setLabel(votes > 0 ? `Vote (${votes})` : 'Vote Skip')
+          .setEmoji('🗳️').setStyle(ButtonStyle.Secondary).setDisabled(disabled),
+        new ButtonBuilder().setCustomId('stop').setEmoji('⏹️').setStyle(ButtonStyle.Danger).setDisabled(disabled),
+        new ButtonBuilder().setCustomId('shuffle').setEmoji('🔀').setStyle(ButtonStyle.Secondary).setDisabled(disabled)
       )
     )
+    // Row 2 — Extra controls
     .addActionRowComponents(
       new ActionRowBuilder().addComponents(
         new ButtonBuilder()
-          .setCustomId('loop')
-          .setEmoji('🔁')
-          .setStyle(
-            player.loop && player.loop !== 'none' ? ButtonStyle.Success : ButtonStyle.Secondary
-          )
+          .setCustomId('loop').setEmoji('🔁')
+          .setStyle(player.loop && player.loop !== 'none' ? ButtonStyle.Success : ButtonStyle.Secondary)
           .setDisabled(disabled),
         new ButtonBuilder()
-          .setCustomId('autoplay')
-          .setLabel('Autoplay')
+          .setCustomId('autoplay').setLabel('Autoplay')
           .setEmoji(autoplayEnabled.has(player.guildId) ? '✅' : '❌')
           .setStyle(autoplayEnabled.has(player.guildId) ? ButtonStyle.Success : ButtonStyle.Secondary)
           .setDisabled(disabled),
-        new ButtonBuilder()
-          .setCustomId('lyrics')
-          .setEmoji('📝')
-          .setLabel('Lyrics')
-          .setStyle(ButtonStyle.Secondary)
-          .setDisabled(disabled),
-        new ButtonBuilder()
-          .setCustomId('queue')
-          .setEmoji('📋')
-          .setStyle(ButtonStyle.Secondary)
-          .setDisabled(disabled),
-        new ButtonBuilder()
-          .setCustomId('history')
-          .setEmoji('🕒')
-          .setLabel('History')
-          .setStyle(ButtonStyle.Secondary)
-          .setDisabled(disabled)
+        new ButtonBuilder().setCustomId('filters').setEmoji('🎛️').setLabel('Filters').setStyle(ButtonStyle.Secondary).setDisabled(disabled),
+        new ButtonBuilder().setCustomId('queue').setEmoji('📋').setLabel('Queue').setStyle(ButtonStyle.Secondary).setDisabled(disabled),
+        new ButtonBuilder().setCustomId('lyrics').setEmoji('📝').setLabel('Lyrics').setStyle(ButtonStyle.Secondary).setDisabled(disabled)
       )
     );
 }
 
+// ── Simple info container ─────────────────────────────────────────────────────
 function createSimpleContainer(title, description, emoji = 'ℹ️') {
   return new ContainerBuilder()
     .addSectionComponents(
@@ -308,41 +416,44 @@ function createSimpleContainer(title, description, emoji = 'ℹ️') {
     .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
 }
 
+// ── Queue ─────────────────────────────────────────────────────────────────────
 function createQueueContainer(player) {
-  const queue = player.queue ?? [];
+  const queue   = player.queue ?? [];
   const current = player.current;
   let desc = '';
 
   if (current?.info) {
-    desc +=
-      `**Now Playing:**\n` +
+    const src = detectSource(current.info);
+    desc += `**🎵 Now Playing:**\n` +
       `**[${current.info.title}](${current.info.uri})**\n` +
-      `${current.info.author ?? 'Unknown'} • ${formatTime(current.info.length)} • <@${current.info.requester}>\n\n`;
+      `${current.info.author ?? 'Unknown'} • ${formatTime(current.info.length)} • ${src.emoji} ${src.name} • <@${current.info.requester}>\n\n`;
   }
 
   if (queue.length > 0) {
-    desc += `**Up Next:**\n`;
+    desc += `**📋 Up Next:**\n`;
     queue.slice(0, 10).forEach((t, i) => {
       const inf = t.info ?? {};
-      desc += `\`${i + 1}.\` **[${inf.title}](${inf.uri})**\n${inf.author ?? 'Unknown'} • ${formatTime(inf.length)} • <@${inf.requester}>\n`;
+      const src = detectSource(inf);
+      desc += `\`${i + 1}.\` **[${inf.title}](${inf.uri})**\n` +
+        `${inf.author ?? 'Unknown'} • ${formatTime(inf.length)} • ${src.emoji} • <@${inf.requester}>\n`;
     });
     if (queue.length > 10) desc += `\n*...and ${queue.length - 10} more track(s)*`;
   } else if (!current) {
-    desc = 'The queue is currently empty.';
+    desc = 'Queue is empty. Use `/play` to add songs!';
   }
 
-  desc +=
-    `\n\n**Loop:** ${(!player.loop || player.loop === 'none') ? 'off' : player.loop}` +
-    ` | **Autoplay:** ${autoplayEnabled.has(player.guildId) ? '✅ On' : '❌ Off'}` +
-    ` | **Volume:** ${player.volume ?? 100}%` +
-    ` | **Total:** ${queue.length + (current ? 1 : 0)} tracks`;
+  const fSet = activeFilters.get(player.guildId) ?? new Set();
+  desc += `\n\n` +
+    `🔁 Loop: \`${(!player.loop || player.loop === 'none') ? 'off' : player.loop}\`` +
+    ` │ 🤖 Autoplay: \`${autoplayEnabled.has(player.guildId) ? 'on' : 'off'}\`` +
+    ` │ 🔊 Vol: \`${player.volume ?? 100}%\`` +
+    ` │ 🎵 Total: \`${queue.length + (current ? 1 : 0)}\`` +
+    (fSet.size > 0 ? ` │ 🎛️ \`${[...fSet].join(', ')}\`` : '');
 
   return new ContainerBuilder()
     .addSectionComponents(
       new SectionBuilder()
-        .addTextDisplayComponents(
-          new TextDisplayBuilder().setContent(`## 📋 Queue\n${desc}`)
-        )
+        .addTextDisplayComponents(new TextDisplayBuilder().setContent(`## 📋 Queue\n${desc}`))
         .setThumbnailAccessory(
           new ThumbnailBuilder().setURL(client.user.displayAvatarURL({ size: 1024 })).setDescription('Queue')
         )
@@ -350,23 +461,58 @@ function createQueueContainer(player) {
     .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
 }
 
-function createHistoryContainer(guildId) {
-  const hist = songHistory.get(guildId) ?? [];
-  let desc = '';
-  if (hist.length === 0) {
-    desc = 'No songs played yet in this session.';
-  } else {
-    hist.slice(0, 15).forEach((t, i) => {
-      const inf = t.info ?? {};
-      desc += `\`${i + 1}.\` **[${inf.title}](${inf.uri})**\n${inf.author ?? 'Unknown'} • ${formatTime(inf.length)} • <@${inf.requester}>\n`;
-    });
-  }
+// ── Filters menu ──────────────────────────────────────────────────────────────
+function createFiltersContainer(guildId) {
+  const fSet    = activeFilters.get(guildId) ?? new Set();
+  const activeStr = fSet.size > 0 ? [...fSet].map(f => `\`${f}\``).join(' ') : '`none`';
+
+  const filterList =
+    `🎸 \`bassboost\`   — Heavy bass enhancement\n` +
+    `🌙 \`nightcore\`   — Sped up + higher pitch\n` +
+    `🌊 \`vaporwave\`   — Slowed + lower pitch\n` +
+    `🎧 \`8d\`          — Spatial 8D audio\n` +
+    `😴 \`slowedreverb\`— Slowed with reverb\n` +
+    `🔆 \`treble\`      — Treble boost\n` +
+    `🎤 \`pop\`         — Pop equalizer\n` +
+    `🌀 \`soft\`        — Low-pass smooth\n` +
+    `📢 \`loud\`        — All bands boosted\n` +
+    `🦻 \`earrape\`     — Max boost (loud!)\n` +
+    `🎤 \`karaoke\`     — Vocal remover\n` +
+    `📻 \`distortion\`  — Distortion effect\n` +
+    `🐉 \`china\`       — China effect\n` +
+    `🐿️ \`chipmunk\`    — Chipmunk pitch\n` +
+    `🎵 \`vibrato\`     — Vibrato effect\n\n` +
+    `**Active:** ${activeStr}\n\n` +
+    `Use \`/filter <name>\` to toggle • \`/clearfilters\` to reset`;
+
   return new ContainerBuilder()
     .addSectionComponents(
       new SectionBuilder()
         .addTextDisplayComponents(
-          new TextDisplayBuilder().setContent(`## 🕒 Song History\n${desc}`)
+          new TextDisplayBuilder().setContent(`## 🎛️ Audio Filters\n${filterList}`)
         )
+        .setThumbnailAccessory(
+          new ThumbnailBuilder().setURL(client.user.displayAvatarURL({ size: 1024 })).setDescription('Filters')
+        )
+    )
+    .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
+}
+
+// ── History ───────────────────────────────────────────────────────────────────
+function createHistoryContainer(guildId) {
+  const hist = songHistory.get(guildId) ?? [];
+  let desc = hist.length === 0
+    ? 'No songs played yet this session.'
+    : hist.slice(0, 15).map((t, i) => {
+        const inf = t.info ?? {};
+        const src = detectSource(inf);
+        return `\`${i + 1}.\` **[${inf.title}](${inf.uri})**\n${inf.author ?? 'Unknown'} • ${formatTime(inf.length)} • ${src.emoji} <@${inf.requester}>`;
+      }).join('\n');
+
+  return new ContainerBuilder()
+    .addSectionComponents(
+      new SectionBuilder()
+        .addTextDisplayComponents(new TextDisplayBuilder().setContent(`## 🕒 Song History\n${desc}`))
         .setThumbnailAccessory(
           new ThumbnailBuilder().setURL(client.user.displayAvatarURL({ size: 1024 })).setDescription('History')
         )
@@ -374,22 +520,22 @@ function createHistoryContainer(guildId) {
     .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
 }
 
+// ── Stats ─────────────────────────────────────────────────────────────────────
 function createStatsContainer() {
   const mem = (process.memoryUsage().heapUsed / 1024 / 1024).toFixed(2);
-  const totalUsers = client.guilds.cache.reduce((a, g) => a + g.memberCount, 0);
   return new ContainerBuilder()
     .addSectionComponents(
       new SectionBuilder()
         .addTextDisplayComponents(
           new TextDisplayBuilder().setContent(
-            `## ℹ️ Bot Statistics\n` +
-            `**Servers:** ${client.guilds.cache.size}\n` +
-            `**Users:** ${totalUsers}\n` +
-            `**Active Players:** ${riffy.players?.size ?? 0}\n` +
-            `**Uptime:** ${formatTime(client.uptime)}\n` +
-            `**Ping:** ${client.ws.ping}ms\n` +
-            `**Memory:** ${mem} MB\n` +
-            `**Lavalink:** ${isLavalinkConnected ? '🟢 Connected' : '🔴 Disconnected'}`
+            `## 📊 Bot Statistics\n` +
+            `🏠 **Servers:** \`${client.guilds.cache.size}\`\n` +
+            `👥 **Users:** \`${client.guilds.cache.reduce((a, g) => a + g.memberCount, 0)}\`\n` +
+            `🎵 **Active Players:** \`${riffy.players?.size ?? 0}\`\n` +
+            `⏱️ **Uptime:** \`${formatTime(client.uptime)}\`\n` +
+            `📶 **Ping:** \`${client.ws.ping}ms\`\n` +
+            `🧠 **Memory:** \`${mem} MB\`\n` +
+            `🔗 **Lavalink:** ${isLavalinkConnected ? '🟢 Connected' : '🔴 Disconnected'}`
           )
         )
         .setThumbnailAccessory(
@@ -399,44 +545,37 @@ function createStatsContainer() {
     .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
 }
 
+// ── Help ─────────────────────────────────────────────────────────────────────
 function createHelpContainer() {
-  const lavalinkStatus = isLavalinkConnected ? '🟢 Connected' : '🔴 Disconnected';
   return new ContainerBuilder()
     .addSectionComponents(
       new SectionBuilder()
         .addTextDisplayComponents(
           new TextDisplayBuilder().setContent(
-            `## ${client.user.username} — Help Menu\n` +
-            `A powerful music bot with high quality audio\n` +
-            `**Lavalink:** ${lavalinkStatus} | Made by **SKY x LIVE**\n\n` +
-            `**🎵 Music Commands**\n` +
-            `\`/play\` — Play a song or playlist\n` +
-            `\`/pause\` — Pause current song\n` +
-            `\`/resume\` — Resume playback\n` +
-            `\`/skip\` — Skip current song (DJ only if set)\n` +
-            `\`/voteskip\` — Vote to skip (50% required)\n` +
-            `\`/stop\` — Stop player & clear queue\n` +
-            `\`/nowplaying\` — Show current song\n` +
-            `\`/queue\` — Show queue\n` +
-            `\`/loop\` — Set loop mode (off/track/queue)\n` +
-            `\`/shuffle\` — Shuffle the queue\n` +
-            `\`/volume\` — Set volume (1–150)\n` +
-            `\`/clearqueue\` — Clear the queue\n` +
-            `\`/remove\` — Remove a song from queue\n` +
-            `\`/move\` — Move a song in queue\n` +
-            `\`/247\` — Toggle 24/7 mode\n` +
-            `\`/autoplay\` — Toggle autoplay\n` +
-            `\`/lyrics\` — Get lyrics for current or any song\n` +
-            `\`/history\` — Show song history\n\n` +
-            `**🛡️ DJ / Admin Commands**\n` +
-            `\`/djrole\` — Set/remove DJ role\n\n` +
-            `**ℹ️ Utility Commands**\n` +
-            `\`/stats\` — Bot stats\n` +
-            `\`/ping\` — Bot latency\n` +
-            `\`/invite\` — Bot invite link\n` +
-            `\`/support\` — Support server\n` +
-            `\`/help\` — This menu\n\n` +
-            `💡 **Tip:** Supports YouTube, Spotify playlists & albums!`
+            `## 🎵 ${client.user.username} — Help\n` +
+            `Crystal-clear music from **YouTube · Spotify · SoundCloud · Apple Music**\n` +
+            `Lavalink: ${isLavalinkConnected ? '🟢' : '🔴'} · Made by **SKY x LIVE**\n\n` +
+
+            `**🎵 Playback**\n` +
+            `\`/play\` \`/pause\` \`/resume\` \`/skip\` \`/stop\`\n` +
+            `\`/nowplaying\` \`/voteskip\` \`/247\` \`/autoplay\`\n\n` +
+
+            `**📋 Queue**\n` +
+            `\`/queue\` \`/shuffle\` \`/loop\` \`/clearqueue\`\n` +
+            `\`/remove\` \`/move\` \`/volume\` \`/history\`\n\n` +
+
+            `**🎛️ Audio Filters (15+)**\n` +
+            `\`/filter\` — Toggle: \`bassboost\` \`nightcore\` \`vaporwave\`\n` +
+            `\`8d\` \`slowedreverb\` \`karaoke\` \`chipmunk\` \`vibrato\` …\n` +
+            `\`/clearfilters\` — Remove all effects\n\n` +
+
+            `**🛡️ DJ / Admin**\n` +
+            `\`/djrole\` \`/lyrics\`\n\n` +
+
+            `**ℹ️ Utility**\n` +
+            `\`/stats\` \`/ping\` \`/invite\` \`/support\` \`/help\`\n\n` +
+
+            `💡 Supports Spotify playlists, albums & single tracks!`
           )
         )
         .setThumbnailAccessory(
@@ -446,74 +585,78 @@ function createHelpContainer() {
     .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
     .addActionRowComponents(
       new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setLabel('Invite Me')
-          .setStyle(ButtonStyle.Link)
+        new ButtonBuilder().setLabel('Invite Me').setStyle(ButtonStyle.Link)
           .setURL(`https://discord.com/api/oauth2/authorize?client_id=${client.user.id}&permissions=3165184&scope=bot%20applications.commands`),
-        new ButtonBuilder()
-          .setLabel('Support')
-          .setStyle(ButtonStyle.Link)
-          .setURL(config.supportServer)
+        new ButtonBuilder().setLabel('Support').setStyle(ButtonStyle.Link).setURL(config.supportServer)
       )
     );
 }
 
-// ══════════════════════════════════════════════════════════════════
-//  CORE PLAY HANDLER
-// ══════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════════
+//  CORE PLAY HANDLER  ← ROOT FIX HERE
+// ══════════════════════════════════════════════════════════════════════════════
 
 async function handlePlay(guildId, voiceChannelId, textChannelId, query, requesterId, reply, editReply) {
   if (!isLavalinkConnected) {
-    return reply(`❌ Lavalink is not connected. Music commands are unavailable.`);
+    return reply('❌ Lavalink is not connected. Please try again in a moment.');
   }
 
-  // ── Spotify ─────────────────────────────────────────────────────
+  // Spotify
   if (spotifyModule.isSpotifyUrl(query)) {
     const spotifyReplyFn = async (data) => {
       const embedData = data?.embeds?.[0];
       const title = embedData?.data?.title ?? embedData?.title ?? 'Spotify';
-      const description = embedData?.data?.description ?? embedData?.description ?? '';
+      const desc  = embedData?.data?.description ?? embedData?.description ?? '';
       return editReply({
-        components: [createSimpleContainer(title, description, '🎵')],
+        components: [createSimpleContainer(title, desc, '🟢')],
         flags: MessageFlags.IsPersistent | MessageFlags.IsComponentsV2
       });
     };
-    const spotifyPlayer = makeSpotifyAdapter(guildId, voiceChannelId, textChannelId, requesterId);
-    await spotifyModule.handleSpotify(query, guildId, textChannelId, requesterId, spotifyReplyFn, spotifyPlayer);
+    await spotifyModule.handleSpotify(
+      query, guildId, textChannelId, requesterId,
+      spotifyReplyFn, makeSpotifyAdapter(guildId, voiceChannelId, textChannelId, requesterId)
+    );
     return;
   }
 
-  // ── Get or create player ─────────────────────────────────────────
+  // Get or create player
   let player = riffy.players.get(guildId);
-  if (!player) {
-    player = riffy.createConnection({
-      guildId,
-      voiceChannel: voiceChannelId,
-      textChannel: textChannelId,
-      deaf: true
-    });
+  const isNew = !player;
+
+  if (isNew) {
+    player = riffy.createConnection({ guildId, voiceChannel: voiceChannelId, textChannel: textChannelId, deaf: true });
+    // ★ KEY FIX: Wait for voice handshake before proceeding
+    const ready = await waitForPlayerReady(guildId, 6000);
+    if (!ready) console.warn(`[handlePlay] Voice timeout for ${guildId} — continuing anyway`);
   }
 
   const resolve = await resolveWithFallback(query, requesterId);
   if (!resolve?.tracks?.length) {
-    return editReply(`❌ No results found for **${query}**. Try a different search or paste a direct URL.`);
+    if (isNew) { try { player.destroy(); } catch (_) {} }
+    return editReply('❌ No results found. Try a different search or paste a direct URL.');
   }
 
   if (resolve.loadType === 'playlist') {
-    for (const track of resolve.tracks) {
-      track.info.requester = requesterId;
-      player.queue.add(track);
-    }
+    for (const t of resolve.tracks) { t.info.requester = requesterId; player.queue.add(t); }
     await editReply({
-      components: [createSimpleContainer('Playlist Added', `Added **${resolve.playlistInfo.name}** — ${resolve.tracks.length} tracks`, '✅')],
+      components: [createSimpleContainer(
+        'Playlist Added',
+        `📀 **${resolve.playlistInfo.name}**\n🎵 ${resolve.tracks.length} tracks added to queue`,
+        '✅'
+      )],
       flags: MessageFlags.IsPersistent | MessageFlags.IsComponentsV2
     });
   } else {
     const track = resolve.tracks[0];
     track.info.requester = requesterId;
     player.queue.add(track);
+    const src = detectSource(track.info);
     await editReply({
-      components: [createSimpleContainer('Added to Queue', `[${track.info.title}](${track.info.uri})`, '✅')],
+      components: [createSimpleContainer(
+        'Added to Queue',
+        `${src.emoji} **[${track.info.title}](${track.info.uri})**\n👤 ${track.info.author ?? 'Unknown'} • ⏱️ ${formatTime(track.info.length)}`,
+        '✅'
+      )],
       flags: MessageFlags.IsPersistent | MessageFlags.IsComponentsV2
     });
   }
@@ -521,112 +664,82 @@ async function handlePlay(guildId, voiceChannelId, textChannelId, query, request
   if (!player.playing && !player.paused) player.play();
 }
 
-// ══════════════════════════════════════════════════════════════════
-//  LYRICS HANDLER (shared between slash + button)
-// ══════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════════
+//  LYRICS
+// ══════════════════════════════════════════════════════════════════════════════
 
 async function handleLyrics(guildId, query, replyFn) {
   if (!geniusClient) {
-    return replyFn({ content: '❌ Lyrics feature unavailable. Ask host to run `npm install genius-lyrics`.', ephemeral: true });
+    return replyFn({ content: '❌ Lyrics unavailable. Install: `npm install genius-lyrics`', ephemeral: true });
   }
-
   let searchQuery = query;
   if (!searchQuery) {
     const player = riffy.players.get(guildId);
-    if (!player?.current) {
-      return replyFn({ content: '❌ No song is playing and no query provided.', ephemeral: true });
-    }
-    const info = player.current.info;
-    // Strip bracketed junk like [Official Video], (Lyrics), etc.
-    searchQuery = `${info.title} ${info.author}`
-      .replace(/\[.*?\]|\(.*?\)/g, '')
-      .trim();
+    if (!player?.current) return replyFn({ content: '❌ Nothing is playing.', ephemeral: true });
+    const inf = player.current.info;
+    searchQuery = `${inf.title} ${inf.author}`.replace(/\[.*?\]|\(.*?\)/g, '').trim();
   }
-
   try {
-    const searches = await geniusClient.songs.search(searchQuery);
-    if (!searches?.length) {
-      return replyFn({ content: `❌ No lyrics found for **${searchQuery}**.`, ephemeral: true });
-    }
-    const song = searches[0];
+    const results = await geniusClient.songs.search(searchQuery);
+    if (!results?.length) return replyFn({ content: `❌ No lyrics for **${searchQuery}**`, ephemeral: true });
+    const song   = results[0];
     const lyrics = await song.lyrics();
+    if (!lyrics) return replyFn({ content: `❌ Lyrics unavailable for **${song.title}**`, ephemeral: true });
 
-    if (!lyrics) {
-      return replyFn({ content: `❌ Lyrics unavailable for **${song.title}**.`, ephemeral: true });
-    }
-
-    // Chunk into ≤4000 chars to avoid Discord embed limits
     const chunks = [];
-    let current = '';
+    let cur = '';
     for (const line of lyrics.split('\n')) {
-      if ((current + '\n' + line).length > 3800) {
-        chunks.push(current);
-        current = line;
-      } else {
-        current += (current ? '\n' : '') + line;
-      }
+      if ((cur + '\n' + line).length > 3800) { chunks.push(cur); cur = line; }
+      else cur += (cur ? '\n' : '') + line;
     }
-    if (current) chunks.push(current);
-
-    const container = new ContainerBuilder()
-      .addSectionComponents(
-        new SectionBuilder()
-          .addTextDisplayComponents(
-            new TextDisplayBuilder().setContent(
-              `## 📝 ${song.title}\n**By:** ${song.artist?.name ?? 'Unknown'}\n\n${chunks[0]}`
-            )
-          )
-          .setThumbnailAccessory(
-            new ThumbnailBuilder()
-              .setURL(song.image ?? client.user.displayAvatarURL({ size: 1024 }))
-              .setDescription('Album Art')
-          )
-      )
-      .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
+    if (cur) chunks.push(cur);
 
     await replyFn({
-      components: [container],
+      components: [
+        new ContainerBuilder()
+          .addSectionComponents(
+            new SectionBuilder()
+              .addTextDisplayComponents(
+                new TextDisplayBuilder().setContent(
+                  `## 📝 ${song.title}\n**By:** ${song.artist?.name ?? 'Unknown'}\n\n${chunks[0]}`
+                )
+              )
+              .setThumbnailAccessory(
+                new ThumbnailBuilder()
+                  .setURL(song.image ?? client.user.displayAvatarURL({ size: 1024 }))
+                  .setDescription('Album Art')
+              )
+          )
+          .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
+      ],
       flags: MessageFlags.IsComponentsV2 | MessageFlags.IsPersistent,
       ephemeral: true
     });
-
-    // If lyrics overflow, send remaining chunks as follow-ups (ephemeral can't follow up, skip)
-  } catch (err) {
-    console.error('Lyrics error:', err);
-    return replyFn({ content: `❌ Failed to fetch lyrics: ${err.message}`, ephemeral: true });
+  } catch (e) {
+    console.error('[Lyrics]', e.message);
+    replyFn({ content: `❌ Lyrics error: ${e.message}`, ephemeral: true });
   }
 }
 
-// ══════════════════════════════════════════════════════════════════
-//  VOTE SKIP LOGIC
-// ══════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════════
+//  VOTE SKIP
+// ══════════════════════════════════════════════════════════════════════════════
 
-/**
- * Returns { skip: true } if threshold met, else { skip: false, current, required }
- */
 function processVoteSkip(player, userId) {
   const guildId = player.guildId;
   if (!voteSkips.has(guildId)) voteSkips.set(guildId, new Set());
   const votes = voteSkips.get(guildId);
   votes.add(userId);
-
-  // Count real members in voice (excluding bots)
-  const voiceChannel = client.channels.cache.get(player.voiceChannel);
-  const memberCount = voiceChannel
-    ? [...voiceChannel.members.values()].filter(m => !m.user.bot).length
-    : 2;
-
+  const vc = client.channels.cache.get(player.voiceChannel);
+  const memberCount = vc ? [...vc.members.values()].filter(m => !m.user.bot).length : 2;
   const required = Math.ceil(memberCount * 0.5);
-  if (votes.size >= required) {
-    voteSkips.delete(guildId);
-    return { skip: true };
-  }
+  if (votes.size >= required) { voteSkips.delete(guildId); return { skip: true }; }
   return { skip: false, current: votes.size, required };
 }
 
-// ══════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════════
 //  RIFFY EVENTS
-// ══════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════════
 
 riffy.on('nodeConnect', (node) => {
   console.log(`✅ Node "${node.name}" connected`);
@@ -634,120 +747,99 @@ riffy.on('nodeConnect', (node) => {
 });
 
 riffy.on('nodeError', (node, error) => {
-  console.error(`❌ Node "${node.name}" error:`, error);
-  isLavalinkConnected = false;
+  console.error(`❌ Node "${node.name}" error:`, error?.message ?? error);
+  isLavalinkConnected = riffy.nodes?.some?.(n => n.connected) ?? false;
 });
 
 riffy.on('nodeDisconnect', (node) => {
-  console.log(`❌ Node "${node.name}" disconnected`);
-  isLavalinkConnected = false;
+  console.warn(`⚠️  Node "${node.name}" disconnected — retrying in 5s`);
+  isLavalinkConnected = riffy.nodes?.some?.(n => n.connected) ?? false;
+  setTimeout(() => { try { node.connect?.(); } catch (_) {} }, 5000);
 });
 
 riffy.on('trackStart', async (player, track) => {
-  // Save to history
   pushHistory(player.guildId, track);
-  // Reset vote skips for new song
   voteSkips.delete(player.guildId);
 
   const channel = client.channels.cache.get(player.textChannel);
   if (!channel) return;
 
-  // Delete old NP message
-  const oldMsg = nowPlayingMsgs.get(player.guildId);
-  if (oldMsg) {
-    try { await oldMsg.delete(); } catch (_) {}
-    nowPlayingMsgs.delete(player.guildId);
-  }
+  const old = nowPlayingMsgs.get(player.guildId);
+  if (old) { try { await old.delete(); } catch (_) {} nowPlayingMsgs.delete(player.guildId); }
 
   try {
-    const container = createNowPlayingContainer(player, track);
     const msg = await channel.send({
-      components: [container],
+      components: [createNowPlayingContainer(player, track)],
       flags: MessageFlags.IsPersistent | MessageFlags.IsComponentsV2
     });
     nowPlayingMsgs.set(player.guildId, msg);
-  } catch (err) {
-    console.error('trackStart send error:', err);
-  }
+  } catch (e) { console.error('[trackStart]', e.message); }
+});
+
+riffy.on('trackError', (player, track, error) => {
+  console.error(`[trackError] ${track?.info?.title}:`, error?.message ?? error);
+  try { player.stop(); } catch (_) {}
 });
 
 riffy.on('queueEnd', async (player) => {
-  const channel = client.channels.cache.get(player.textChannel);
+  const channel   = client.channels.cache.get(player.textChannel);
   const lastTrack = player.current;
 
-  // Disable buttons on NP message
   const msg = nowPlayingMsgs.get(player.guildId);
   if (msg && lastTrack) {
-    try {
-      await msg.edit({
-        components: [createNowPlayingContainer(player, lastTrack, true)],
-        flags: MessageFlags.IsPersistent | MessageFlags.IsComponentsV2
-      });
-    } catch (_) {}
+    try { await msg.edit({ components: [createNowPlayingContainer(player, lastTrack, true)], flags: MessageFlags.IsPersistent | MessageFlags.IsComponentsV2 }); } catch (_) {}
   }
   nowPlayingMsgs.delete(player.guildId);
 
-  // ── Autoplay ─────────────────────────────────────────────────────
+  // Autoplay
   if (autoplayEnabled.has(player.guildId) && lastTrack) {
     try {
-      const title  = lastTrack.info.title ?? '';
-      const author = lastTrack.info.author ?? '';
-      const terms  = [
-        `${title} similar hindi songs`,
-        `${author} hindi sad songs`,
-        `${title} bollywood playlist`,
-        `${author} bollywood hits`,
-        `${title} slowed reverb`,
-        `${author} romantic hindi songs`
+      const terms = [
+        `${lastTrack.info.title} similar songs`, `${lastTrack.info.author} top songs`,
+        `${lastTrack.info.title} bollywood`, `${lastTrack.info.author} hindi hits`,
+        `${lastTrack.info.title} slowed reverb`, `${lastTrack.info.author} romantic songs`
       ];
       const raw    = terms[Math.floor(Math.random() * terms.length)];
       const result = await riffy.resolve({ query: `ytmsearch:${raw}`, requester: lastTrack.info.requester });
-
       if (result?.tracks?.length) {
         const pool = result.tracks.filter(t => t.info.uri !== lastTrack.info.uri);
         const next = (pool.length ? pool : result.tracks)[Math.floor(Math.random() * (pool.length || result.tracks.length))];
         next.info.requester = lastTrack.info.requester;
         player.queue.add(next);
         player.play();
-        if (channel) {
-          await channel.send({
-            components: [createSimpleContainer('Autoplay', `Added **[${next.info.title}](${next.info.uri})**`, '🔁')],
-            flags: MessageFlags.IsPersistent | MessageFlags.IsComponentsV2
-          });
-        }
+        if (channel) await channel.send({
+          components: [createSimpleContainer('Autoplay', `🤖 Added **[${next.info.title}](${next.info.uri})**`, '🔁')],
+          flags: MessageFlags.IsPersistent | MessageFlags.IsComponentsV2
+        });
         return;
       }
-    } catch (err) { console.error('Autoplay error:', err); }
+    } catch (e) { console.error('[Autoplay]', e.message); }
   }
 
-  // ── 24/7 ─────────────────────────────────────────────────────────
+  // 24/7
   if (queue247.has(player.guildId)) {
-    if (channel) {
-      await channel.send({
-        components: [createSimpleContainer('24/7 Mode', 'Queue ended — staying connected', 'ℹ️')],
-        flags: MessageFlags.IsPersistent | MessageFlags.IsComponentsV2
-      });
-    }
+    if (channel) await channel.send({
+      components: [createSimpleContainer('24/7 Mode', 'Queue ended — staying in VC', 'ℹ️')],
+      flags: MessageFlags.IsPersistent | MessageFlags.IsComponentsV2
+    });
     return;
   }
 
-  if (channel) {
-    await channel.send({
-      components: [createSimpleContainer('Queue Ended', 'All songs played — leaving voice channel', '✅')],
-      flags: MessageFlags.IsPersistent | MessageFlags.IsComponentsV2
-    });
-  }
-  player.destroy();
+  if (channel) await channel.send({
+    components: [createSimpleContainer('Queue Ended', 'All songs played! Use `/play` to add more.', '✅')],
+    flags: MessageFlags.IsPersistent | MessageFlags.IsComponentsV2
+  });
+  try { player.destroy(); } catch (_) {}
+  activeFilters.delete(player.guildId);
 });
 
-// ══════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════════
 //  CLIENT EVENTS
-// ══════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════════
 
 client.on('ready', async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
-  try { riffy.init(client.user.id); }
-  catch (e) { console.error('Riffy init error:', e); }
+  try { riffy.init(client.user.id); } catch (e) { console.error('[Riffy Init]', e); }
 
   const types = {
     PLAYING: ActivityType.Playing, LISTENING: ActivityType.Listening,
@@ -756,243 +848,161 @@ client.on('ready', async () => {
   };
   client.user.setActivity(config.activity.name, { type: types[config.activity.type] ?? ActivityType.Listening });
 
-  // ── Register slash commands ─────────────────────────────────────
   const commands = [
-    {
-      name: 'play',
-      description: 'Play a song or playlist (YouTube, Spotify)',
-      options: [{ name: 'query', description: 'Song name, URL, or Spotify link', type: 3, required: true }]
-    },
-    { name: 'pause',      description: 'Pause the current song' },
-    { name: 'resume',     description: 'Resume paused playback' },
-    { name: 'skip',       description: 'Skip the current song (DJ only if set)' },
-    { name: 'voteskip',   description: 'Vote to skip the current song (50% of VC required)' },
-    { name: 'stop',       description: 'Stop player and clear queue' },
-    {
-      name: 'volume',
-      description: 'Set volume (1–150)',
-      options: [{ name: 'level', description: 'Volume level', type: 4, required: true, min_value: 1, max_value: 150 }]
-    },
-    { name: 'queue',      description: 'Show the current queue' },
-    { name: 'nowplaying', description: 'Show the currently playing song' },
-    { name: 'shuffle',    description: 'Shuffle the queue' },
-    {
-      name: 'loop',
-      description: 'Set loop mode',
-      options: [{
-        name: 'mode', description: 'Loop mode', type: 3, required: true,
-        choices: [{ name: 'Off', value: 'none' }, { name: 'Track', value: 'track' }, { name: 'Queue', value: 'queue' }]
-      }]
-    },
-    {
-      name: 'remove',
-      description: 'Remove a song from the queue',
-      options: [{ name: 'position', description: 'Queue position', type: 4, required: true, min_value: 1 }]
-    },
-    {
-      name: 'move',
-      description: 'Move a song in the queue',
+    { name: 'play',      description: 'Play a song or playlist (YouTube, Spotify, SoundCloud)',
+      options: [{ name: 'query', description: 'Song name, URL, or Spotify link', type: 3, required: true }] },
+    { name: 'pause',     description: 'Pause the current song' },
+    { name: 'resume',    description: 'Resume paused playback' },
+    { name: 'skip',      description: 'Skip the current song (DJ only if set)' },
+    { name: 'voteskip',  description: 'Vote to skip (50% of VC required)' },
+    { name: 'stop',      description: 'Stop player and clear queue' },
+    { name: 'volume',    description: 'Set volume (1–150)',
+      options: [{ name: 'level', description: 'Volume level', type: 4, required: true, min_value: 1, max_value: 150 }] },
+    { name: 'queue',     description: 'Show the current queue' },
+    { name: 'nowplaying',description: 'Show the currently playing song' },
+    { name: 'shuffle',   description: 'Shuffle the queue' },
+    { name: 'loop',      description: 'Set loop mode',
+      options: [{ name: 'mode', description: 'Loop mode', type: 3, required: true,
+        choices: [{ name: 'Off', value: 'none' }, { name: 'Track', value: 'track' }, { name: 'Queue', value: 'queue' }] }] },
+    { name: 'remove',    description: 'Remove a song from queue',
+      options: [{ name: 'position', description: 'Queue position', type: 4, required: true, min_value: 1 }] },
+    { name: 'move',      description: 'Move a song in queue',
       options: [
         { name: 'from', description: 'From position', type: 4, required: true, min_value: 1 },
         { name: 'to',   description: 'To position',   type: 4, required: true, min_value: 1 }
-      ]
-    },
-    { name: 'clearqueue', description: 'Clear the entire queue' },
-    { name: '247',        description: 'Toggle 24/7 mode (stay in VC)' },
-    { name: 'autoplay',   description: 'Toggle autoplay (auto-queue similar songs)' },
-    {
-      name: 'lyrics',
-      description: 'Get lyrics for the current song or a search query',
-      options: [{ name: 'query', description: 'Song name (leave empty for current song)', type: 3, required: false }]
-    },
-    { name: 'history',    description: 'Show recently played songs' },
-    {
-      name: 'djrole',
-      description: 'Set or remove the DJ role (Admin only)',
-      options: [{ name: 'role', description: 'DJ role (leave empty to remove)', type: 8, required: false }]
-    },
-    { name: 'stats',   description: 'Show bot statistics' },
-    { name: 'ping',    description: 'Show bot latency' },
-    { name: 'invite',  description: 'Get bot invite link' },
-    { name: 'support', description: 'Get support server link' },
-    { name: 'help',    description: 'Show all commands' }
+      ] },
+    { name: 'clearqueue',description: 'Clear the entire queue' },
+    { name: '247',       description: 'Toggle 24/7 mode (stay in VC)' },
+    { name: 'autoplay',  description: 'Toggle autoplay (auto-queue similar songs)' },
+    { name: 'filter',    description: 'Apply an audio filter',
+      options: [{ name: 'name', description: `Filter name (${FILTER_NAMES.join(', ')})`, type: 3, required: true,
+        choices: FILTER_NAMES.map(f => ({ name: f, value: f })) }] },
+    { name: 'clearfilters', description: 'Remove all audio filters' },
+    { name: 'lyrics',    description: 'Get lyrics',
+      options: [{ name: 'query', description: 'Song name (empty = current song)', type: 3, required: false }] },
+    { name: 'history',   description: 'Show recently played songs' },
+    { name: 'djrole',    description: 'Set/remove DJ role (Admin only)',
+      options: [{ name: 'role', description: 'DJ role (empty to remove)', type: 8, required: false }] },
+    { name: 'stats',     description: 'Show bot statistics' },
+    { name: 'ping',      description: 'Show bot latency' },
+    { name: 'invite',    description: 'Get bot invite link' },
+    { name: 'support',   description: 'Get support server link' },
+    { name: 'help',      description: 'Show all commands' }
   ];
 
   await client.application.commands.set(commands);
-  console.log(`✅ ${commands.length} slash commands registered globally`);
+  console.log(`✅ ${commands.length} slash commands registered`);
 });
 
+// Raw voice state → Riffy (also fires waitForPlayerReady listeners)
 client.on('raw', (d) => {
   try {
     if (!d || !['VOICE_STATE_UPDATE', 'VOICE_SERVER_UPDATE'].includes(d.t)) return;
     riffy.updateVoiceState(d);
-  } catch (err) {
-    console.error('raw event error:', err.message);
-  }
+  } catch (e) { console.error('[raw]', e.message); }
 });
 
-// ══════════════════════════════════════════════════════════════════
-//  INTERACTIONS — BUTTONS + SLASH COMMANDS
-// ══════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════════
+//  INTERACTIONS
+// ══════════════════════════════════════════════════════════════════════════════
 
 client.on('interactionCreate', async (interaction) => {
 
-  // ════════════════════════════════════════════════════════════════
-  //  BUTTON INTERACTIONS
-  // ════════════════════════════════════════════════════════════════
+  // ── BUTTONS ────────────────────────────────────────────────────────────────
   if (interaction.isButton()) {
     const player = riffy.players.get(interaction.guildId);
-
-    if (!player) {
-      return interaction.reply({ content: '❌ No active player found', ephemeral: true }).catch(() => {});
-    }
+    if (!player) return interaction.reply({ content: '❌ No active player', ephemeral: true }).catch(() => {});
 
     const member = interaction.member;
-    if (!member.voice.channel) {
-      return interaction.reply({ content: '❌ You need to be in a voice channel', ephemeral: true }).catch(() => {});
-    }
-    if (member.voice.channel.id !== player.voiceChannel) {
+    if (!member.voice?.channel)
+      return interaction.reply({ content: '❌ Join a voice channel first', ephemeral: true }).catch(() => {});
+    if (member.voice.channel.id !== player.voiceChannel)
       return interaction.reply({ content: '❌ Join the same voice channel as the bot', ephemeral: true }).catch(() => {});
-    }
 
-    // DJ check for destructive buttons (skip, stop, shuffle, loop)
-    const djRequired = ['skip', 'stop', 'shuffle', 'loop'];
-    if (djRequired.includes(interaction.customId) && !hasDJPermission(member, interaction.guildId)) {
-      return interaction.reply({ content: `❌ You need the DJ role to use this button.`, ephemeral: true }).catch(() => {});
-    }
+    const djProtected = ['skip', 'stop', 'shuffle', 'loop'];
+    if (djProtected.includes(interaction.customId) && !hasDJPermission(member, interaction.guildId))
+      return interaction.reply({ content: '❌ DJ role required', ephemeral: true }).catch(() => {});
 
     try {
       switch (interaction.customId) {
 
-        // ── Pause / Resume ────────────────────────────────────────
-        case 'pause':
-        case 'resume': {
-          const shouldPause = interaction.customId === 'pause';
-          await player.pause(shouldPause);
-          const npMsg = nowPlayingMsgs.get(player.guildId);
-          if (npMsg && player.current) {
-            await npMsg.edit({
-              components: [createNowPlayingContainer(player, player.current)],
-              flags: MessageFlags.IsPersistent | MessageFlags.IsComponentsV2
-            }).catch(() => {});
+        case 'pause': case 'resume': {
+          const pause = interaction.customId === 'pause';
+          await player.pause(pause);
+          if (player.current) {
+            const nm = nowPlayingMsgs.get(player.guildId);
+            if (nm) await nm.edit({ components: [createNowPlayingContainer(player, player.current)], flags: MessageFlags.IsPersistent | MessageFlags.IsComponentsV2 }).catch(() => {});
           }
-          await interaction.reply({ content: shouldPause ? '⏸️ Paused' : '▶️ Resumed', ephemeral: true });
+          await interaction.reply({ content: pause ? '⏸️ Paused' : '▶️ Resumed', ephemeral: true });
           break;
         }
 
-        // ── Skip ─────────────────────────────────────────────────
         case 'skip': {
-          if (player.current) {
-            await interaction.message.edit({
-              components: [createNowPlayingContainer(player, player.current, true)],
-              flags: MessageFlags.IsPersistent | MessageFlags.IsComponentsV2
-            }).catch(() => {});
-          }
+          if (player.current) await interaction.message.edit({ components: [createNowPlayingContainer(player, player.current, true)], flags: MessageFlags.IsPersistent | MessageFlags.IsComponentsV2 }).catch(() => {});
           player.stop();
           await interaction.reply({ content: '⏭️ Skipped', ephemeral: true });
           break;
         }
 
-        // ── Vote Skip ─────────────────────────────────────────────
         case 'voteskip': {
-          if (!player.current) {
-            return interaction.reply({ content: '❌ Nothing is playing', ephemeral: true });
-          }
-          const result = processVoteSkip(player, member.user.id);
-          if (result.skip) {
-            if (player.current) {
-              await interaction.message.edit({
-                components: [createNowPlayingContainer(player, player.current, true)],
-                flags: MessageFlags.IsPersistent | MessageFlags.IsComponentsV2
-              }).catch(() => {});
-            }
+          if (!player.current) return interaction.reply({ content: '❌ Nothing playing', ephemeral: true });
+          const res = processVoteSkip(player, member.user.id);
+          if (res.skip) {
+            if (player.current) await interaction.message.edit({ components: [createNowPlayingContainer(player, player.current, true)], flags: MessageFlags.IsPersistent | MessageFlags.IsComponentsV2 }).catch(() => {});
             player.stop();
-            await interaction.reply({ content: '🗳️ Vote skip passed! Skipping...', ephemeral: false });
+            await interaction.reply({ content: '🗳️ Vote passed! Skipping...', ephemeral: false });
           } else {
-            // Refresh NP message to show updated vote count
-            const npMsg = nowPlayingMsgs.get(player.guildId);
-            if (npMsg && player.current) {
-              await npMsg.edit({
-                components: [createNowPlayingContainer(player, player.current)],
-                flags: MessageFlags.IsPersistent | MessageFlags.IsComponentsV2
-              }).catch(() => {});
-            }
-            await interaction.reply({
-              content: `🗳️ Vote recorded! **${result.current}/${result.required}** votes to skip.`,
-              ephemeral: true
-            });
+            const nm = nowPlayingMsgs.get(player.guildId);
+            if (nm && player.current) await nm.edit({ components: [createNowPlayingContainer(player, player.current)], flags: MessageFlags.IsPersistent | MessageFlags.IsComponentsV2 }).catch(() => {});
+            await interaction.reply({ content: `🗳️ **${res.current}/${res.required}** votes to skip`, ephemeral: true });
           }
           break;
         }
 
-        // ── Stop ─────────────────────────────────────────────────
         case 'stop': {
-          if (player.current) {
-            await interaction.message.edit({
-              components: [createNowPlayingContainer(player, player.current, true)],
-              flags: MessageFlags.IsPersistent | MessageFlags.IsComponentsV2
-            }).catch(() => {});
-          }
+          if (player.current) await interaction.message.edit({ components: [createNowPlayingContainer(player, player.current, true)], flags: MessageFlags.IsPersistent | MessageFlags.IsComponentsV2 }).catch(() => {});
           nowPlayingMsgs.delete(player.guildId);
-          player.destroy();
+          activeFilters.delete(player.guildId);
+          try { player.destroy(); } catch (_) {}
           await interaction.reply({ content: '⏹️ Stopped and cleared queue', ephemeral: true });
           break;
         }
 
-        // ── Shuffle ───────────────────────────────────────────────
         case 'shuffle': {
-          if (!player.queue?.length) {
-            return interaction.reply({ content: '❌ Queue is empty', ephemeral: true });
-          }
+          if (!player.queue?.length) return interaction.reply({ content: '❌ Queue is empty', ephemeral: true });
           player.queue.shuffle();
           await interaction.reply({ content: '🔀 Queue shuffled!', ephemeral: true });
           break;
         }
 
-        // ── Loop ──────────────────────────────────────────────────
         case 'loop': {
           const modes = ['none', 'track', 'queue'];
           const next  = modes[(modes.indexOf(player.loop ?? 'none') + 1) % modes.length];
           player.setLoop(next);
-          const npMsg = nowPlayingMsgs.get(player.guildId);
-          if (npMsg && player.current) {
-            await npMsg.edit({
-              components: [createNowPlayingContainer(player, player.current)],
-              flags: MessageFlags.IsPersistent | MessageFlags.IsComponentsV2
-            }).catch(() => {});
-          }
-          await interaction.reply({ content: `🔁 Loop set to: **${next}**`, ephemeral: true });
+          const nm = nowPlayingMsgs.get(player.guildId);
+          if (nm && player.current) await nm.edit({ components: [createNowPlayingContainer(player, player.current)], flags: MessageFlags.IsPersistent | MessageFlags.IsComponentsV2 }).catch(() => {});
+          await interaction.reply({ content: `🔁 Loop: **${next}**`, ephemeral: true });
           break;
         }
 
-        // ── Autoplay ──────────────────────────────────────────────
         case 'autoplay': {
-          if (autoplayEnabled.has(player.guildId)) autoplayEnabled.delete(player.guildId);
-          else autoplayEnabled.add(player.guildId);
+          autoplayEnabled.has(player.guildId) ? autoplayEnabled.delete(player.guildId) : autoplayEnabled.add(player.guildId);
           const on = autoplayEnabled.has(player.guildId);
-          const npMsg = nowPlayingMsgs.get(player.guildId);
-          if (npMsg && player.current) {
-            await npMsg.edit({
-              components: [createNowPlayingContainer(player, player.current)],
-              flags: MessageFlags.IsPersistent | MessageFlags.IsComponentsV2
-            }).catch(() => {});
-          }
-          await interaction.reply({ content: on ? '✅ Autoplay Enabled' : '❌ Autoplay Disabled', ephemeral: true });
+          const nm = nowPlayingMsgs.get(player.guildId);
+          if (nm && player.current) await nm.edit({ components: [createNowPlayingContainer(player, player.current)], flags: MessageFlags.IsPersistent | MessageFlags.IsComponentsV2 }).catch(() => {});
+          await interaction.reply({ content: on ? '✅ Autoplay ON' : '❌ Autoplay OFF', ephemeral: true });
           break;
         }
 
-        // ── Lyrics ────────────────────────────────────────────────
-        case 'lyrics': {
-          await interaction.deferReply({ ephemeral: true });
-          await handleLyrics(
-            interaction.guildId,
-            null,
-            (data) => interaction.editReply(data)
-          );
+        case 'filters': {
+          await interaction.reply({
+            components: [createFiltersContainer(interaction.guildId)],
+            flags: MessageFlags.IsComponentsV2 | MessageFlags.IsPersistent,
+            ephemeral: true
+          });
           break;
         }
 
-        // ── Queue ────────────────────────────────────────────────
         case 'queue': {
           await interaction.reply({
             components: [createQueueContainer(player)],
@@ -1002,21 +1012,16 @@ client.on('interactionCreate', async (interaction) => {
           break;
         }
 
-        // ── History ───────────────────────────────────────────────
-        case 'history': {
-          await interaction.reply({
-            components: [createHistoryContainer(interaction.guildId)],
-            flags: MessageFlags.IsComponentsV2 | MessageFlags.IsPersistent,
-            ephemeral: true
-          });
+        case 'lyrics': {
+          await interaction.deferReply({ ephemeral: true });
+          await handleLyrics(interaction.guildId, null, d => interaction.editReply(d));
           break;
         }
       }
-    } catch (err) {
-      console.error('Button error:', err);
-      if (!interaction.replied && !interaction.deferred) {
+    } catch (e) {
+      console.error('[Button]', e.message);
+      if (!interaction.replied && !interaction.deferred)
         await interaction.reply({ content: '❌ Something went wrong', ephemeral: true }).catch(() => {});
-      }
     }
     return;
   }
@@ -1025,251 +1030,247 @@ client.on('interactionCreate', async (interaction) => {
 
   const { commandName, options, member, guild, channel } = interaction;
 
-  // ── Helper: get player with VC check ─────────────────────────────
-  const getPlayerAndCheck = (requireVC = true) => {
-    const player = riffy.players.get(guild.id);
-    if (!player) {
-      interaction.reply({ content: '❌ No active player found', ephemeral: true });
-      return null;
-    }
+  // Helper
+  const getPlayer = (requireVC = true) => {
+    const p = riffy.players.get(guild.id);
+    if (!p) { interaction.reply({ content: '❌ No active player', ephemeral: true }); return null; }
     if (requireVC) {
-      if (!member.voice.channel) {
-        interaction.reply({ content: '❌ You need to be in a voice channel', ephemeral: true });
-        return null;
-      }
-      if (member.voice.channel.id !== player.voiceChannel) {
-        interaction.reply({ content: '❌ Join the same voice channel as the bot', ephemeral: true });
-        return null;
-      }
+      if (!member.voice?.channel) { interaction.reply({ content: '❌ Join a voice channel first', ephemeral: true }); return null; }
+      if (member.voice.channel.id !== p.voiceChannel) { interaction.reply({ content: '❌ Join the bot\'s voice channel', ephemeral: true }); return null; }
     }
-    return player;
+    return p;
   };
 
-  // ── DJ check for slash commands ────────────────────────────────
-  const djCommands = ['skip', 'stop', 'shuffle', 'loop', 'volume', 'remove', 'move', 'clearqueue'];
-  if (djCommands.includes(commandName) && !hasDJPermission(member, guild.id)) {
-    return interaction.reply({ content: `❌ You need the **DJ role** to use \`/${commandName}\`.`, ephemeral: true });
-  }
+  // DJ check
+  const djCmds = ['skip', 'stop', 'shuffle', 'loop', 'volume', 'remove', 'move', 'clearqueue', 'filter', 'clearfilters'];
+  if (djCmds.includes(commandName) && !hasDJPermission(member, guild.id))
+    return interaction.reply({ content: `❌ DJ role required for \`/${commandName}\``, ephemeral: true });
 
   try {
-    // ════════════════════════════════════════════════════════════
-    //  SLASH COMMAND HANDLERS
-    // ════════════════════════════════════════════════════════════
 
+    // ── play ──────────────────────────────────────────────────────────────────
     if (commandName === 'play') {
-      if (!member.voice.channel) {
-        return interaction.reply({ content: '❌ You need to be in a voice channel', ephemeral: true });
-      }
+      if (!member.voice?.channel) return interaction.reply({ content: '❌ Join a voice channel first', ephemeral: true });
       await interaction.deferReply();
       await handlePlay(
-        guild.id,
-        member.voice.channel.id,
-        channel.id,
-        options.getString('query'),
-        member.user.id,
-        (msg) => interaction.reply(typeof msg === 'string' ? { content: msg, ephemeral: true } : msg),
-        (data) => interaction.editReply(data)
+        guild.id, member.voice.channel.id, channel.id,
+        options.getString('query'), member.user.id,
+        msg => interaction.reply(typeof msg === 'string' ? { content: msg, ephemeral: true } : msg),
+        data => interaction.editReply(data)
       );
     }
 
+    // ── pause ─────────────────────────────────────────────────────────────────
     else if (commandName === 'pause') {
-      const player = getPlayerAndCheck();
-      if (!player) return;
-      player.pause(true);
+      const p = getPlayer(); if (!p) return;
+      await p.pause(true);
       await interaction.reply({ components: [createSimpleContainer('Paused', 'Playback paused', '⏸️')], flags: MessageFlags.IsComponentsV2 });
     }
 
+    // ── resume ────────────────────────────────────────────────────────────────
     else if (commandName === 'resume') {
-      const player = getPlayerAndCheck();
-      if (!player) return;
-      player.pause(false);
+      const p = getPlayer(); if (!p) return;
+      await p.pause(false);
       await interaction.reply({ components: [createSimpleContainer('Resumed', 'Playback resumed', '▶️')], flags: MessageFlags.IsComponentsV2 });
     }
 
+    // ── skip ──────────────────────────────────────────────────────────────────
     else if (commandName === 'skip') {
-      const player = getPlayerAndCheck();
-      if (!player) return;
-      player.stop();
+      const p = getPlayer(); if (!p) return;
+      p.stop();
       await interaction.reply({ components: [createSimpleContainer('Skipped', 'Skipped to next track', '⏭️')], flags: MessageFlags.IsComponentsV2 });
     }
 
+    // ── voteskip ──────────────────────────────────────────────────────────────
     else if (commandName === 'voteskip') {
-      const player = getPlayerAndCheck();
-      if (!player) return;
-      if (!player.current) {
-        return interaction.reply({ content: '❌ Nothing is playing', ephemeral: true });
-      }
-      const result = processVoteSkip(player, member.user.id);
-      if (result.skip) {
-        player.stop();
-        await interaction.reply({ components: [createSimpleContainer('Vote Skip Passed', 'Enough votes! Skipping...', '🗳️')], flags: MessageFlags.IsComponentsV2 });
+      const p = getPlayer(); if (!p) return;
+      if (!p.current) return interaction.reply({ content: '❌ Nothing playing', ephemeral: true });
+      const res = processVoteSkip(p, member.user.id);
+      if (res.skip) {
+        p.stop();
+        await interaction.reply({ components: [createSimpleContainer('Vote Passed!', 'Skipping now...', '🗳️')], flags: MessageFlags.IsComponentsV2 });
       } else {
-        await interaction.reply({
-          components: [createSimpleContainer('Vote Recorded', `**${result.current}/${result.required}** votes to skip.`, '🗳️')],
-          flags: MessageFlags.IsComponentsV2
-        });
+        await interaction.reply({ components: [createSimpleContainer('Vote Recorded', `**${res.current}/${res.required}** votes needed`, '🗳️')], flags: MessageFlags.IsComponentsV2 });
       }
     }
 
+    // ── stop ──────────────────────────────────────────────────────────────────
     else if (commandName === 'stop') {
-      const player = getPlayerAndCheck();
-      if (!player) return;
+      const p = getPlayer(); if (!p) return;
       nowPlayingMsgs.delete(guild.id);
-      player.destroy();
-      await interaction.reply({ components: [createSimpleContainer('Stopped', 'Stopped and cleared queue', '⏹️')], flags: MessageFlags.IsComponentsV2 });
+      activeFilters.delete(guild.id);
+      try { p.destroy(); } catch (_) {}
+      await interaction.reply({ components: [createSimpleContainer('Stopped', 'Player stopped and queue cleared', '⏹️')], flags: MessageFlags.IsComponentsV2 });
     }
 
+    // ── volume ────────────────────────────────────────────────────────────────
     else if (commandName === 'volume') {
-      const player = getPlayerAndCheck();
-      if (!player) return;
-      const volume = options.getInteger('level');
-      player.setVolume(volume);
-      await interaction.reply({ components: [createSimpleContainer('Volume', `Set to **${volume}%**`, '🔊')], flags: MessageFlags.IsComponentsV2 });
+      const p = getPlayer(); if (!p) return;
+      const vol = options.getInteger('level');
+      p.setVolume(vol);
+      await interaction.reply({ components: [createSimpleContainer('Volume', `Set to **${vol}%**`, '🔊')], flags: MessageFlags.IsComponentsV2 });
     }
 
+    // ── queue ─────────────────────────────────────────────────────────────────
     else if (commandName === 'queue') {
-      const player = riffy.players.get(guild.id);
-      if (!player) return interaction.reply({ content: '❌ No active player', ephemeral: true });
-      if (!player.queue.length && !player.current) {
-        return interaction.reply({ content: '❌ Queue is empty', ephemeral: true });
-      }
-      await interaction.reply({ components: [createQueueContainer(player)], flags: MessageFlags.IsComponentsV2 | MessageFlags.IsPersistent });
+      const p = riffy.players.get(guild.id);
+      if (!p) return interaction.reply({ content: '❌ No active player', ephemeral: true });
+      if (!p.queue.length && !p.current) return interaction.reply({ content: '❌ Queue is empty', ephemeral: true });
+      await interaction.reply({ components: [createQueueContainer(p)], flags: MessageFlags.IsComponentsV2 | MessageFlags.IsPersistent });
     }
 
+    // ── nowplaying ────────────────────────────────────────────────────────────
     else if (commandName === 'nowplaying') {
-      const player = riffy.players.get(guild.id);
-      if (!player?.current) {
-        return interaction.reply({ content: '❌ Nothing is playing', ephemeral: true });
-      }
-      await interaction.reply({
-        components: [createNowPlayingContainer(player, player.current)],
-        flags: MessageFlags.IsComponentsV2 | MessageFlags.IsPersistent
-      });
+      const p = riffy.players.get(guild.id);
+      if (!p?.current) return interaction.reply({ content: '❌ Nothing playing', ephemeral: true });
+      await interaction.reply({ components: [createNowPlayingContainer(p, p.current)], flags: MessageFlags.IsComponentsV2 | MessageFlags.IsPersistent });
     }
 
+    // ── shuffle ───────────────────────────────────────────────────────────────
     else if (commandName === 'shuffle') {
-      const player = getPlayerAndCheck();
-      if (!player) return;
-      if (!player.queue.length) return interaction.reply({ content: '❌ Queue is empty', ephemeral: true });
-      player.queue.shuffle();
-      await interaction.reply({ components: [createSimpleContainer('Shuffled', 'Queue shuffled!', '🔀')], flags: MessageFlags.IsComponentsV2 });
+      const p = getPlayer(); if (!p) return;
+      if (!p.queue.length) return interaction.reply({ content: '❌ Queue is empty', ephemeral: true });
+      p.queue.shuffle();
+      await interaction.reply({ components: [createSimpleContainer('Shuffled', 'Queue order randomised!', '🔀')], flags: MessageFlags.IsComponentsV2 });
     }
 
+    // ── loop ──────────────────────────────────────────────────────────────────
     else if (commandName === 'loop') {
-      const player = getPlayerAndCheck();
-      if (!player) return;
+      const p = getPlayer(); if (!p) return;
       const mode = options.getString('mode');
-      player.setLoop(mode);
-      await interaction.reply({ components: [createSimpleContainer('Loop', `Loop set to: **${mode}**`, '🔁')], flags: MessageFlags.IsComponentsV2 });
+      p.setLoop(mode);
+      await interaction.reply({ components: [createSimpleContainer('Loop', `Mode set to **${mode}**`, '🔁')], flags: MessageFlags.IsComponentsV2 });
     }
 
+    // ── remove ────────────────────────────────────────────────────────────────
     else if (commandName === 'remove') {
-      const player = getPlayerAndCheck();
-      if (!player) return;
+      const p = getPlayer(); if (!p) return;
       const pos = options.getInteger('position') - 1;
-      if (pos < 0 || pos >= player.queue.length) {
-        return interaction.reply({ content: '❌ Invalid position', ephemeral: true });
-      }
-      const removed = player.queue.remove(pos);
-      await interaction.reply({ components: [createSimpleContainer('Removed', `Removed: **${removed.info.title}**`, '✅')], flags: MessageFlags.IsComponentsV2 });
+      if (pos < 0 || pos >= p.queue.length) return interaction.reply({ content: '❌ Invalid position', ephemeral: true });
+      const removed = p.queue.remove(pos);
+      await interaction.reply({ components: [createSimpleContainer('Removed', `Removed **${removed.info.title}**`, '✅')], flags: MessageFlags.IsComponentsV2 });
     }
 
+    // ── move ──────────────────────────────────────────────────────────────────
     else if (commandName === 'move') {
-      const player = getPlayerAndCheck();
-      if (!player) return;
+      const p = getPlayer(); if (!p) return;
       const from = options.getInteger('from') - 1;
       const to   = options.getInteger('to')   - 1;
-      if (from < 0 || from >= player.queue.length || to < 0 || to >= player.queue.length) {
+      if (from < 0 || from >= p.queue.length || to < 0 || to >= p.queue.length)
         return interaction.reply({ content: '❌ Invalid positions', ephemeral: true });
-      }
-      const arr = Array.from(player.queue);
-      const [track] = arr.splice(from, 1);
-      arr.splice(to, 0, track);
-      player.queue.clear();
-      for (const t of arr) player.queue.add(t);
-      await interaction.reply({ components: [createSimpleContainer('Moved', `Moved: **${track.info.title}**`, '✅')], flags: MessageFlags.IsComponentsV2 });
+      const arr = Array.from(p.queue);
+      const [t]  = arr.splice(from, 1);
+      arr.splice(to, 0, t);
+      p.queue.clear();
+      arr.forEach(tr => p.queue.add(tr));
+      await interaction.reply({ components: [createSimpleContainer('Moved', `Moved **${t.info.title}** to position ${to + 1}`, '✅')], flags: MessageFlags.IsComponentsV2 });
     }
 
+    // ── clearqueue ────────────────────────────────────────────────────────────
     else if (commandName === 'clearqueue') {
-      const player = getPlayerAndCheck();
-      if (!player) return;
-      player.queue.clear();
+      const p = getPlayer(); if (!p) return;
+      p.queue.clear();
       await interaction.reply({ components: [createSimpleContainer('Queue Cleared', 'All upcoming tracks removed', '✅')], flags: MessageFlags.IsComponentsV2 });
     }
 
+    // ── 247 ───────────────────────────────────────────────────────────────────
     else if (commandName === '247') {
-      if (!member.voice.channel) {
-        return interaction.reply({ content: '❌ You need to be in a voice channel', ephemeral: true });
-      }
+      if (!member.voice?.channel) return interaction.reply({ content: '❌ Join a voice channel first', ephemeral: true });
       if (queue247.has(guild.id)) {
         queue247.delete(guild.id);
-        await interaction.reply({ components: [createSimpleContainer('24/7 Disabled', '24/7 mode disabled', '✅')], flags: MessageFlags.IsComponentsV2 });
+        await interaction.reply({ components: [createSimpleContainer('24/7 Disabled', 'Bot will leave when queue ends', '✅')], flags: MessageFlags.IsComponentsV2 });
       } else {
         queue247.add(guild.id);
-        if (!riffy.players.get(guild.id)) {
+        if (!riffy.players.get(guild.id))
           riffy.createConnection({ guildId: guild.id, voiceChannel: member.voice.channel.id, textChannel: channel.id, deaf: true });
-        }
-        await interaction.reply({ components: [createSimpleContainer('24/7 Enabled', 'Bot will stay in VC', '✅')], flags: MessageFlags.IsComponentsV2 });
+        await interaction.reply({ components: [createSimpleContainer('24/7 Enabled', 'Bot will stay in VC forever', '✅')], flags: MessageFlags.IsComponentsV2 });
       }
     }
 
+    // ── autoplay ──────────────────────────────────────────────────────────────
     else if (commandName === 'autoplay') {
-      const player = riffy.players.get(guild.id);
-      if (!player) return interaction.reply({ content: '❌ No active player', ephemeral: true });
-      if (autoplayEnabled.has(guild.id)) {
-        autoplayEnabled.delete(guild.id);
-        await interaction.reply({ components: [createSimpleContainer('Autoplay Disabled', 'Auto-queue disabled', '❌')], flags: MessageFlags.IsComponentsV2 });
+      const p = riffy.players.get(guild.id);
+      if (!p) return interaction.reply({ content: '❌ No active player', ephemeral: true });
+      autoplayEnabled.has(guild.id) ? autoplayEnabled.delete(guild.id) : autoplayEnabled.add(guild.id);
+      const on = autoplayEnabled.has(guild.id);
+      await interaction.reply({ components: [createSimpleContainer(on ? 'Autoplay ON' : 'Autoplay OFF', on ? 'Similar songs will auto-play' : 'Autoplay disabled', on ? '✅' : '❌')], flags: MessageFlags.IsComponentsV2 });
+    }
+
+    // ── filter ────────────────────────────────────────────────────────────────
+    else if (commandName === 'filter') {
+      const p = getPlayer(); if (!p) return;
+      const name = options.getString('name');
+      if (!FILTERS[name]) return interaction.reply({ content: `❌ Unknown filter. Use: \`${FILTER_NAMES.join('`, `')}\``, ephemeral: true });
+
+      if (!activeFilters.has(guild.id)) activeFilters.set(guild.id, new Set());
+      const fSet = activeFilters.get(guild.id);
+
+      if (fSet.has(name)) {
+        // Toggle OFF — clear all then re-apply remaining
+        fSet.delete(name);
+        await clearFilters(p);
+        for (const fn of fSet) await applyFilter(p, fn);
+        await interaction.reply({ components: [createSimpleContainer('Filter Removed', `\`${name}\` disabled`, '🎛️')], flags: MessageFlags.IsComponentsV2 });
       } else {
-        autoplayEnabled.add(guild.id);
-        await interaction.reply({ components: [createSimpleContainer('Autoplay Enabled', 'Auto-queue similar songs enabled', '✅')], flags: MessageFlags.IsComponentsV2 });
+        fSet.add(name);
+        const ok = await applyFilter(p, name);
+        if (!ok) { fSet.delete(name); return interaction.reply({ content: '❌ Failed to apply filter', ephemeral: true }); }
+        await interaction.reply({ components: [createSimpleContainer('Filter Applied', `\`${name}\` enabled! 🎵\nActive: ${[...fSet].map(f => `\`${f}\``).join(' ')}`, '🎛️')], flags: MessageFlags.IsComponentsV2 });
+      }
+
+      // Update NP message
+      if (p.current) {
+        const nm = nowPlayingMsgs.get(guild.id);
+        if (nm) await nm.edit({ components: [createNowPlayingContainer(p, p.current)], flags: MessageFlags.IsPersistent | MessageFlags.IsComponentsV2 }).catch(() => {});
       }
     }
 
+    // ── clearfilters ──────────────────────────────────────────────────────────
+    else if (commandName === 'clearfilters') {
+      const p = getPlayer(); if (!p) return;
+      await clearFilters(p);
+      await interaction.reply({ components: [createSimpleContainer('Filters Cleared', 'All audio effects removed', '🎛️')], flags: MessageFlags.IsComponentsV2 });
+      if (p.current) {
+        const nm = nowPlayingMsgs.get(guild.id);
+        if (nm) await nm.edit({ components: [createNowPlayingContainer(p, p.current)], flags: MessageFlags.IsPersistent | MessageFlags.IsComponentsV2 }).catch(() => {});
+      }
+    }
+
+    // ── lyrics ────────────────────────────────────────────────────────────────
     else if (commandName === 'lyrics') {
       await interaction.deferReply({ ephemeral: true });
-      const query = options.getString('query') ?? null;
-      await handleLyrics(guild.id, query, (data) => interaction.editReply(data));
+      await handleLyrics(guild.id, options.getString('query') ?? null, d => interaction.editReply(d));
     }
 
+    // ── history ───────────────────────────────────────────────────────────────
     else if (commandName === 'history') {
-      await interaction.reply({
-        components: [createHistoryContainer(guild.id)],
-        flags: MessageFlags.IsComponentsV2 | MessageFlags.IsPersistent,
-        ephemeral: true
-      });
+      await interaction.reply({ components: [createHistoryContainer(guild.id)], flags: MessageFlags.IsComponentsV2 | MessageFlags.IsPersistent, ephemeral: true });
     }
 
+    // ── djrole ────────────────────────────────────────────────────────────────
     else if (commandName === 'djrole') {
-      if (!member.permissions.has('Administrator')) {
-        return interaction.reply({ content: '❌ Only Administrators can set the DJ role.', ephemeral: true });
-      }
+      if (!member.permissions.has('Administrator')) return interaction.reply({ content: '❌ Admin only', ephemeral: true });
       const role = options.getRole('role');
       if (role) {
         djRoles.set(guild.id, role.id);
-        await interaction.reply({
-          components: [createSimpleContainer('DJ Role Set', `<@&${role.id}> can now control music`, '🛡️')],
-          flags: MessageFlags.IsComponentsV2
-        });
+        await interaction.reply({ components: [createSimpleContainer('DJ Role Set', `<@&${role.id}> can now control music`, '🛡️')], flags: MessageFlags.IsComponentsV2 });
       } else {
         djRoles.delete(guild.id);
-        await interaction.reply({
-          components: [createSimpleContainer('DJ Role Removed', 'Anyone can now control music', '🛡️')],
-          flags: MessageFlags.IsComponentsV2
-        });
+        await interaction.reply({ components: [createSimpleContainer('DJ Role Removed', 'Everyone can control music now', '🛡️')], flags: MessageFlags.IsComponentsV2 });
       }
     }
 
+    // ── stats ─────────────────────────────────────────────────────────────────
     else if (commandName === 'stats') {
       await interaction.reply({ components: [createStatsContainer()], flags: MessageFlags.IsComponentsV2 });
     }
 
+    // ── ping ──────────────────────────────────────────────────────────────────
     else if (commandName === 'ping') {
-      await interaction.reply({
-        components: [createSimpleContainer('Pong!', `WebSocket Latency: **${client.ws.ping}ms**`, 'ℹ️')],
-        flags: MessageFlags.IsComponentsV2
-      });
+      await interaction.reply({ components: [createSimpleContainer('Pong! 🏓', `WebSocket: **${client.ws.ping}ms**`, '📶')], flags: MessageFlags.IsComponentsV2 });
     }
 
+    // ── invite ────────────────────────────────────────────────────────────────
     else if (commandName === 'invite') {
       const url = `https://discord.com/api/oauth2/authorize?client_id=${client.user.id}&permissions=3165184&scope=bot%20applications.commands`;
       await interaction.reply({
@@ -1277,273 +1278,196 @@ client.on('interactionCreate', async (interaction) => {
           new ContainerBuilder()
             .addSectionComponents(
               new SectionBuilder()
-                .addTextDisplayComponents(
-                  new TextDisplayBuilder().setContent(`## ✅ Invite Bot\n[Click here to invite me!](${url})`)
-                )
-                .setThumbnailAccessory(
-                  new ThumbnailBuilder().setURL(client.user.displayAvatarURL({ size: 1024 })).setDescription('Invite')
-                )
+                .addTextDisplayComponents(new TextDisplayBuilder().setContent(`## ✅ Invite ${client.user.username}\n[Click here to add me to your server!](${url})`))
+                .setThumbnailAccessory(new ThumbnailBuilder().setURL(client.user.displayAvatarURL({ size: 1024 })).setDescription('Invite'))
             )
             .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
-            .addActionRowComponents(
-              new ActionRowBuilder().addComponents(
-                new ButtonBuilder().setLabel('Invite Me').setStyle(ButtonStyle.Link).setURL(url)
-              )
-            )
+            .addActionRowComponents(new ActionRowBuilder().addComponents(
+              new ButtonBuilder().setLabel('Invite Me').setStyle(ButtonStyle.Link).setURL(url)
+            ))
         ],
         flags: MessageFlags.IsComponentsV2
       });
     }
 
+    // ── support ───────────────────────────────────────────────────────────────
     else if (commandName === 'support') {
       await interaction.reply({
         components: [
           new ContainerBuilder()
             .addSectionComponents(
               new SectionBuilder()
-                .addTextDisplayComponents(
-                  new TextDisplayBuilder().setContent(`## ℹ️ Support Server\n[Join our support server](${config.supportServer})`)
-                )
-                .setThumbnailAccessory(
-                  new ThumbnailBuilder().setURL(client.user.displayAvatarURL({ size: 1024 })).setDescription('Support')
-                )
+                .addTextDisplayComponents(new TextDisplayBuilder().setContent(`## ℹ️ Support Server\n[Click here to join our support server](${config.supportServer})`))
+                .setThumbnailAccessory(new ThumbnailBuilder().setURL(client.user.displayAvatarURL({ size: 1024 })).setDescription('Support'))
             )
             .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
-            .addActionRowComponents(
-              new ActionRowBuilder().addComponents(
-                new ButtonBuilder().setLabel('Support Server').setStyle(ButtonStyle.Link).setURL(config.supportServer)
-              )
-            )
+            .addActionRowComponents(new ActionRowBuilder().addComponents(
+              new ButtonBuilder().setLabel('Support Server').setStyle(ButtonStyle.Link).setURL(config.supportServer)
+            ))
         ],
         flags: MessageFlags.IsComponentsV2
       });
     }
 
+    // ── help ──────────────────────────────────────────────────────────────────
     else if (commandName === 'help') {
       await interaction.reply({ components: [createHelpContainer()], flags: MessageFlags.IsComponentsV2 });
     }
 
-  } catch (err) {
-    console.error(`Slash error [/${commandName}]:`, err);
-    const errPayload = { content: '❌ An error occurred', ephemeral: true };
-    if (interaction.deferred)       await interaction.editReply(errPayload).catch(() => {});
-    else if (!interaction.replied)  await interaction.reply(errPayload).catch(() => {});
+  } catch (e) {
+    console.error(`[Slash /${commandName}]`, e.message ?? e);
+    const errPayload = { content: '❌ An error occurred. Please try again.', ephemeral: true };
+    if (interaction.deferred)      await interaction.editReply(errPayload).catch(() => {});
+    else if (!interaction.replied) await interaction.reply(errPayload).catch(() => {});
   }
 });
 
-// ══════════════════════════════════════════════════════════════════
-//  MENTION COMMANDS — @BOT join/leave/skip/previous/play
-// ══════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════════
+//  MENTION COMMANDS  @BOT <command>
+// ══════════════════════════════════════════════════════════════════════════════
 
 client.on('messageCreate', async (message) => {
   if (message.author.bot || !message.guild) return;
+  const mentionRx = new RegExp(`^<@!?${client.user.id}>\\s*`);
+  if (!mentionRx.test(message.content.trim())) return;
 
-  // Must mention the bot
-  const mentionRegex = new RegExp(`^<@!?${client.user.id}>\\s*`);
-  if (!mentionRegex.test(message.content.trim())) return;
-
-  const args    = message.content.trim().replace(mentionRegex, '').trim().split(/\s+/);
+  const args    = message.content.trim().replace(mentionRx, '').trim().split(/\s+/);
   const command = args[0]?.toLowerCase();
   const rest    = args.slice(1).join(' ').trim();
 
-  // Helper: quick reply with Components V2 simple container
   const reply = (title, desc, emoji = '✅') =>
-    message.reply({
-      components: [createSimpleContainer(title, desc, emoji)],
-      flags: MessageFlags.IsComponentsV2
-    }).catch(() => {});
+    message.reply({ components: [createSimpleContainer(title, desc, emoji)], flags: MessageFlags.IsComponentsV2 }).catch(() => {});
 
   try {
-    // ── join ────────────────────────────────────────────────────
     if (command === 'join') {
-      if (!message.member.voice.channel) {
-        return reply('Error', 'You need to be in a voice channel first!', '❌');
-      }
-      let player = riffy.players.get(message.guild.id);
-      if (player) {
-        return reply('Already Connected', `Already in <#${player.voiceChannel}>`, 'ℹ️');
-      }
-      player = riffy.createConnection({
-        guildId:      message.guild.id,
-        voiceChannel: message.member.voice.channel.id,
-        textChannel:  message.channel.id,
-        deaf: true
-      });
+      if (!message.member.voice?.channel) return reply('Error', 'Join a voice channel first!', '❌');
+      const existing = riffy.players.get(message.guild.id);
+      if (existing) return reply('Already Connected', `Already in <#${existing.voiceChannel}>`, 'ℹ️');
+      riffy.createConnection({ guildId: message.guild.id, voiceChannel: message.member.voice.channel.id, textChannel: message.channel.id, deaf: true });
       return reply('Joined', `Connected to **${message.member.voice.channel.name}** 🎤`);
     }
 
-    // ── leave ───────────────────────────────────────────────────
-    if (command === 'leave' || command === 'disconnect' || command === 'dc') {
-      const player = riffy.players.get(message.guild.id);
-      if (!player) return reply('Error', 'Not connected to any voice channel.', '❌');
+    if (['leave','disconnect','dc'].includes(command)) {
+      const p = riffy.players.get(message.guild.id);
+      if (!p) return reply('Error', 'Not in a voice channel.', '❌');
       nowPlayingMsgs.delete(message.guild.id);
       queue247.delete(message.guild.id);
-      player.destroy();
-      return reply('Left', 'Disconnected from voice channel 👋');
+      activeFilters.delete(message.guild.id);
+      try { p.destroy(); } catch (_) {}
+      return reply('Left', 'Disconnected 👋');
     }
 
-    // ── skip ────────────────────────────────────────────────────
     if (command === 'skip' || command === 's') {
-      const player = riffy.players.get(message.guild.id);
-      if (!player) return reply('Error', 'Nothing is playing.', '❌');
-      if (!message.member.voice.channel || message.member.voice.channel.id !== player.voiceChannel) {
-        return reply('Error', 'Join the same voice channel as the bot!', '❌');
-      }
-      if (!hasDJPermission(message.member, message.guild.id)) {
-        return reply('Error', 'You need the DJ role to skip!', '❌');
-      }
-      if (!player.current) return reply('Error', 'Nothing is playing.', '❌');
-      player.stop();
-      return reply('Skipped', 'Skipped to next track ⏭️');
+      const p = riffy.players.get(message.guild.id);
+      if (!p) return reply('Error', 'Nothing playing.', '❌');
+      if (!message.member.voice?.channel || message.member.voice.channel.id !== p.voiceChannel)
+        return reply('Error', 'Join the bot\'s voice channel!', '❌');
+      if (!hasDJPermission(message.member, message.guild.id)) return reply('Error', 'DJ role required!', '❌');
+      if (!p.current) return reply('Error', 'Nothing playing.', '❌');
+      p.stop();
+      return reply('Skipped', 'Skipped ⏭️');
     }
 
-    // ── previous ────────────────────────────────────────────────
-    if (command === 'previous' || command === 'prev' || command === 'back') {
-      const player = riffy.players.get(message.guild.id);
-      if (!player) return reply('Error', 'Nothing is playing.', '❌');
-      if (!message.member.voice.channel || message.member.voice.channel.id !== player.voiceChannel) {
-        return reply('Error', 'Join the same voice channel as the bot!', '❌');
-      }
-
+    if (['previous','prev','back'].includes(command)) {
+      const p = riffy.players.get(message.guild.id);
+      if (!p) return reply('Error', 'Nothing playing.', '❌');
+      if (!message.member.voice?.channel || message.member.voice.channel.id !== p.voiceChannel)
+        return reply('Error', 'Join the bot\'s voice channel!', '❌');
       const hist = songHistory.get(message.guild.id) ?? [];
-      // hist[0] is current song, hist[1] is previous
-      const prevTrack = hist[1];
-      if (!prevTrack) {
-        return reply('No History', 'No previous song found in history.', 'ℹ️');
-      }
-
-      // Re-resolve the previous track and play it next
+      const prev = hist[1];
+      if (!prev) return reply('No History', 'No previous song found.', 'ℹ️');
       try {
-        const result = await resolveWithFallback(
-          prevTrack.info.uri || prevTrack.info.title,
-          message.author.id
-        );
+        const result = await resolveWithFallback(prev.info.uri || prev.info.title, message.author.id);
         if (result?.tracks?.length) {
-          const track = result.tracks[0];
-          track.info.requester = prevTrack.info.requester ?? message.author.id;
-          // Add to front of queue then skip current
-          player.queue.unshift(track);
-          player.stop();
-          return reply('Previous', `Playing previous track: **[${prevTrack.info.title}](${prevTrack.info.uri})**`, '⏮️');
+          const t = result.tracks[0];
+          t.info.requester = prev.info.requester ?? message.author.id;
+          p.queue.unshift(t);
+          p.stop();
+          return reply('Previous', `Now playing: **[${prev.info.title}](${prev.info.uri})**`, '⏮️');
         }
-      } catch (e) { console.error('Previous track resolve error:', e); }
+      } catch (e) { console.error('[prev]', e.message); }
       return reply('Error', 'Could not load previous track.', '❌');
     }
 
-    // ── pause ───────────────────────────────────────────────────
     if (command === 'pause' || command === 'pa') {
-      const player = riffy.players.get(message.guild.id);
-      if (!player?.current) return reply('Error', 'Nothing is playing.', '❌');
-      player.pause(true);
-      return reply('Paused', 'Playback paused ⏸️');
+      const p = riffy.players.get(message.guild.id);
+      if (!p?.current) return reply('Error', 'Nothing playing.', '❌');
+      await p.pause(true);
+      return reply('Paused', 'Paused ⏸️');
     }
 
-    // ── resume ──────────────────────────────────────────────────
     if (command === 'resume' || command === 'r') {
-      const player = riffy.players.get(message.guild.id);
-      if (!player) return reply('Error', 'Nothing is playing.', '❌');
-      player.pause(false);
-      return reply('Resumed', 'Playback resumed ▶️');
+      const p = riffy.players.get(message.guild.id);
+      if (!p) return reply('Error', 'Nothing playing.', '❌');
+      await p.pause(false);
+      return reply('Resumed', 'Resumed ▶️');
     }
 
-    // ── stop ────────────────────────────────────────────────────
     if (command === 'stop' || command === 'st') {
-      const player = riffy.players.get(message.guild.id);
-      if (!player) return reply('Error', 'Nothing is playing.', '❌');
-      if (!hasDJPermission(message.member, message.guild.id)) {
-        return reply('Error', 'You need the DJ role to stop!', '❌');
-      }
+      const p = riffy.players.get(message.guild.id);
+      if (!p) return reply('Error', 'Nothing playing.', '❌');
+      if (!hasDJPermission(message.member, message.guild.id)) return reply('Error', 'DJ role required!', '❌');
       nowPlayingMsgs.delete(message.guild.id);
-      player.destroy();
-      return reply('Stopped', 'Stopped and cleared queue ⏹️');
+      activeFilters.delete(message.guild.id);
+      try { p.destroy(); } catch (_) {}
+      return reply('Stopped', 'Stopped ⏹️');
     }
 
-    // ── np / nowplaying ─────────────────────────────────────────
     if (command === 'np' || command === 'nowplaying') {
-      const player = riffy.players.get(message.guild.id);
-      if (!player?.current) return reply('Error', 'Nothing is playing.', '❌');
-      return message.reply({
-        components: [createNowPlayingContainer(player, player.current)],
-        flags: MessageFlags.IsComponentsV2 | MessageFlags.IsPersistent
-      }).catch(() => {});
+      const p = riffy.players.get(message.guild.id);
+      if (!p?.current) return reply('Error', 'Nothing playing.', '❌');
+      return message.reply({ components: [createNowPlayingContainer(p, p.current)], flags: MessageFlags.IsComponentsV2 | MessageFlags.IsPersistent }).catch(() => {});
     }
 
-    // ── queue ───────────────────────────────────────────────────
     if (command === 'queue' || command === 'q') {
-      const player = riffy.players.get(message.guild.id);
-      if (!player) return reply('Error', 'Nothing is playing.', '❌');
-      return message.reply({
-        components: [createQueueContainer(player)],
-        flags: MessageFlags.IsComponentsV2 | MessageFlags.IsPersistent
-      }).catch(() => {});
+      const p = riffy.players.get(message.guild.id);
+      if (!p) return reply('Error', 'Nothing playing.', '❌');
+      return message.reply({ components: [createQueueContainer(p)], flags: MessageFlags.IsComponentsV2 | MessageFlags.IsPersistent }).catch(() => {});
     }
 
-    // ── play ────────────────────────────────────────────────────
     if (command === 'play' || command === 'p' || !command) {
       const query = rest || (command !== 'play' && command !== 'p' ? args.join(' ') : '');
-      if (!query) {
-        return reply('Usage', '`@SKY x MUSIC play <song name or URL>`', 'ℹ️');
-      }
-      if (!message.member.voice.channel) {
-        return reply('Error', 'You need to be in a voice channel first!', '❌');
-      }
+      if (!query) return reply('Usage', `\`@${client.user.username} play <song name or URL>\``, 'ℹ️');
+      if (!message.member.voice?.channel) return reply('Error', 'Join a voice channel first!', '❌');
 
       const sent = await message.reply({
-        components: [createSimpleContainer('Searching', `🔍 Looking for **${query}**...`, 'ℹ️')],
+        components: [createSimpleContainer('Searching', `🔍 **${query}**...`, 'ℹ️')],
         flags: MessageFlags.IsComponentsV2
       }).catch(() => null);
 
-      const editReply = async (data) => {
+      const editR = async (data) => {
         if (!sent) return;
-        if (typeof data === 'string') {
-          return sent.edit({ content: data, components: [] }).catch(() => {});
-        }
+        if (typeof data === 'string') return sent.edit({ content: data, components: [] }).catch(() => {});
         return sent.edit({ content: '', ...data }).catch(() => {});
       };
 
       await handlePlay(
-        message.guild.id,
-        message.member.voice.channel.id,
-        message.channel.id,
-        query,
-        message.author.id,
-        async (msg) => {
-          if (!sent) return;
-          if (typeof msg === 'string') return sent.edit({ content: msg, components: [] }).catch(() => {});
-          return sent.edit({ content: '', ...msg }).catch(() => {});
-        },
-        editReply
+        message.guild.id, message.member.voice.channel.id, message.channel.id,
+        query, message.author.id,
+        async msg => { if (!sent) return; if (typeof msg === 'string') return sent.edit({ content: msg, components: [] }).catch(() => {}); return sent.edit({ content: '', ...msg }).catch(() => {}); },
+        editR
       );
       return;
     }
 
-    // ── help ────────────────────────────────────────────────────
     if (command === 'help' || command === 'h') {
       return message.reply({
-        components: [createSimpleContainer(
-          'Mention Commands',
-          `**@${client.user.username} join** — Join your voice channel\n` +
-          `**@${client.user.username} leave** — Leave voice channel\n` +
-          `**@${client.user.username} play <song>** — Play a song\n` +
-          `**@${client.user.username} skip** — Skip current song\n` +
-          `**@${client.user.username} previous** — Play previous song\n` +
-          `**@${client.user.username} pause** — Pause playback\n` +
-          `**@${client.user.username} resume** — Resume playback\n` +
-          `**@${client.user.username} stop** — Stop and clear queue\n` +
-          `**@${client.user.username} np** — Now playing\n` +
-          `**@${client.user.username} queue** — Show queue\n\n` +
-          `💡 Use \`/help\` for all slash commands!`,
-          'ℹ️'
-        )],
+        components: [createSimpleContainer('Mention Commands',
+          `**@${client.user.username} join** — Join VC\n**@${client.user.username} leave** — Leave VC\n` +
+          `**@${client.user.username} play <song>** — Play\n**@${client.user.username} skip** — Skip\n` +
+          `**@${client.user.username} previous** — Previous\n**@${client.user.username} pause** — Pause\n` +
+          `**@${client.user.username} resume** — Resume\n**@${client.user.username} stop** — Stop\n` +
+          `**@${client.user.username} np** — Now Playing\n**@${client.user.username} queue** — Queue\n\n` +
+          `💡 Use \`/help\` for all slash commands!`, 'ℹ️')],
         flags: MessageFlags.IsComponentsV2
       }).catch(() => {});
     }
 
-  } catch (err) {
-    console.error('[Mention Command Error]', err);
-    message.reply(`❌ Something went wrong: ${err.message}`).catch(() => {});
+  } catch (e) {
+    console.error('[Mention]', e.message ?? e);
+    message.reply(`❌ Error: ${e.message}`).catch(() => {});
   }
 });
 
-// ─── Login ─────────────────────────────────────────────────────────────────────
+// ─── Login ────────────────────────────────────────────────────────────────────
 client.login(config.token);
