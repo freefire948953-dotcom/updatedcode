@@ -13,6 +13,13 @@ module.exports = {
     type: 'LISTENING'
   },
 
+  // ─── Logs Channel ─────────────────────────────────────────────
+  // Apne Discord server ka channel ID daalo
+  // Jab koi server bot invite kare → us channel mein log aayega
+  // Kaise pata kare: Discord → Settings → Advanced → Developer Mode ON
+  // Phir channel pe right click → Copy Channel ID
+  logsChannelId: process.env.LOGS_CHANNEL_ID || '',
+
   // ─── Express Keep-Alive ────────────────────────────────────────
   express: {
     enabled: true,
@@ -28,21 +35,19 @@ module.exports = {
         port: Number(process.env.LAVALINK_PORT) || 3004,
         password: process.env.LAVALINK_PASSWORD || 'AeroX',
         secure: false,
-        retryAmount: 10,        // auto-reconnect attempts
-        retryDelay: 5000        // 5s between retries
+        retryAmount: 10,
+        retryDelay: 5000
       }
     ]
   },
 
   // ─── Spotify API Credentials ───────────────────────────────────
-  // Get these from: https://developer.spotify.com/dashboard
   spotify: {
     clientId:     process.env.SPOTIFY_CLIENT_ID     || '',
     clientSecret: process.env.SPOTIFY_CLIENT_SECRET || ''
   },
 
   // ─── Genius Lyrics API ─────────────────────────────────────────
-  // Get token from: https://genius.com/api-clients
   genius: {
     token: process.env.GENIUS_TOKEN || ''
   },
@@ -55,7 +60,7 @@ module.exports = {
     filter: '🎛️', history: '🕒', lyrics: '📝'
   },
 
-  // ─── Command Aliases (for mention commands) ────────────────────
+  // ─── Command Aliases ───────────────────────────────────────────
   aliases: {
     play:       ['p'],
     pause:      ['pa'],
