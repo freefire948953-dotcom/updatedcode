@@ -31,10 +31,10 @@ module.exports = {
     nodes: [
       {
         name: 'Main Node',
-        host: process.env.LAVALINK_HOST || '89.106.84.172',
-        port: Number(process.env.LAVALINK_PORT) || 3004,
-        password: process.env.LAVALINK_PASSWORD || 'AeroX',
-        secure: false,
+        host: process.env.LAVALINK_HOST || 'skyxmusic-lavalink.onrender.com',
+        port: Number(process.env.LAVALINK_PORT) || 443,
+        password: process.env.LAVALINK_PASSWORD || 'skyxmusic123',
+        secure: true,
         retryAmount: 10,
         retryDelay: 5000
       }
