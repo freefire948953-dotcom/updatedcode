@@ -268,7 +268,7 @@ function makeSpotifyAdapter(guildId, voiceChannelId, textChannelId, requesterId)
           }
         } catch (e) { console.error('[Spotify Track]', e.message); }
       }
-      if (!player.playing && !player.paused) player.play();
+      if (!player.playing && !player.paused && player.queue.size > 0) player.play();
     },
     guilds: { get: () => ({ maxQueue: 500 }) }
   };
