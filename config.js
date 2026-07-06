@@ -7,7 +7,6 @@ module.exports = {
   prefix: '/',
   enablePrefix: true,
   supportServer: 'https://discord.gg/FqMWA4fucd',
-
   activity: {
     name: '/help | 🎵 Music',
     type: 'LISTENING'
@@ -27,10 +26,22 @@ module.exports = {
   },
 
   // ─── Lavalink ──────────────────────────────────────────────────
+  // Main Node = naya public node (serenetia)
+  // Backup Node = purana Render self-hosted node (fallback)
+  // Riffy automatically backup pe switch kar lega agar Main Node down ho
   lavalink: {
     nodes: [
       {
         name: 'Main Node',
+        host: 'lavalinkv4.serenetia.com',
+        port: 80,
+        password: 'https://seretia.link/discord',
+        secure: false,
+        retryAmount: 10,
+        retryDelay: 5000
+      },
+      {
+        name: 'Backup Node',
         host: process.env.LAVALINK_HOST || 'skyxmusic-lavalink.onrender.com',
         port: Number(process.env.LAVALINK_PORT) || 443,
         password: process.env.LAVALINK_PASSWORD || 'skyxmusic123',
