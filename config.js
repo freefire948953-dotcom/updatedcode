@@ -13,10 +13,6 @@ module.exports = {
   },
 
   // ─── Logs Channel ─────────────────────────────────────────────
-  // Apne Discord server ka channel ID daalo
-  // Jab koi server bot invite kare → us channel mein log aayega
-  // Kaise pata kare: Discord → Settings → Advanced → Developer Mode ON
-  // Phir channel pe right click → Copy Channel ID
   logsChannelId: process.env.LOGS_CHANNEL_ID || '',
 
   // ─── Express Keep-Alive ────────────────────────────────────────
@@ -26,9 +22,16 @@ module.exports = {
   },
 
   // ─── Lavalink ──────────────────────────────────────────────────
-  // Main Node = naya public node (serenetia)
-  // Backup Node = purana Render self-hosted node (fallback)
-  // Riffy automatically backup pe switch kar lega agar Main Node down ho
+  // Sirf Main Node (serenetia public) use ho raha hai.
+  // Backup Node (Render self-hosted) hata diya gaya hai kyunki
+  // Render free tier ki RAM limit (512MB) Lavalink crash kara rahi thi,
+  // jiski wajah se WS handshake 404 aa raha tha aur bot uncaught exception
+  // se crash ho raha tha.
+  //
+  // Agar future mein backup node fix karke wapas add karna ho,
+  // toh niche wala block uncomment karo — lekin pehle Render service
+  // ko paid/more-RAM plan pe upgrade karna zaroori hai, warna wahi error
+  // dobara aayega.
   lavalink: {
     nodes: [
       {
@@ -39,7 +42,9 @@ module.exports = {
         secure: false,
         retryAmount: 10,
         retryDelay: 5000
-      },
+      }
+
+      /*
       {
         name: 'Backup Node',
         host: process.env.LAVALINK_HOST || 'skyxmusic-lavalink.onrender.com',
@@ -49,6 +54,7 @@ module.exports = {
         retryAmount: 10,
         retryDelay: 5000
       }
+      */
     ]
   },
 
