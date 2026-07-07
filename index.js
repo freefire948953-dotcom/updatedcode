@@ -1,9 +1,10 @@
 // ╔══════════════════════════════════════════════════════════════════════╗
-// ║              SKY x MUSIC BOT — index.js  v3.1                      ║
+// ║              SKY x MUSIC BOT — index.js  v3.2                      ║
 // ║  Platforms : YouTube · Spotify · SoundCloud · Apple Music          ║
 // ║  Audio     : Hi-Fi Opus · 15+ Filters · 8D · Bass · Nightcore      ║
 // ║  Features  : Queue · Loop · Shuffle · 24/7 · Autoplay              ║
-// ║              DJ Role · Vote Skip · Lyrics · History · Previous      ║
+// ║              DJ Role · Vote Skip · Lyrics (lyrics.ovh) · History   ║
+// ║              Previous                                               ║
 // ║  UI        : Components V2 — Clean & Modern                         ║
 // ╚══════════════════════════════════════════════════════════════════════╝
 
@@ -30,12 +31,35 @@ const SpotifyClient = require('spotify-url-info');
 const fetch = (...a) => import('node-fetch').then(({ default: f }) => f(...a));
 spotifyModule.init({ spotifyClient: SpotifyClient(fetch) });
 
-// ─── Lyrics ───────────────────────────────────────────────────────────────────
-let geniusClient = null;
-try {
-  const Genius = require('genius-lyrics');
-  geniusClient = new Genius.Client();
-} catch (_) { console.warn('⚠️  genius-lyrics not installed'); }
+// ─── Lyrics (lyrics.ovh) ──────────────────────────────────────────────────────
+async function fetchLyricsOvh(artist, title) {
+  const url = `https://api.lyrics.ovh/v1/${encodeURIComponent(artist)}/${encodeURIComponent(title)}`;
+  let res;
+  try {
+    res = await fetch(url);
+  } catch (e) {
+    console.error('[LyricsOvh] Network error:', e.message);
+    return null;
+  }
+
+  const contentType = res.headers.get('content-type') || '';
+  const rawText = await res.text();
+
+  if (!contentType.includes('application/json')) {
+    console.error('[LyricsOvh] Non-JSON response (likely HTML error page):', rawText.slice(0, 200));
+    return null;
+  }
+
+  let data;
+  try {
+    data = JSON.parse(rawText);
+  } catch (e) {
+    console.error('[LyricsOvh] Parse failed:', e.message);
+    return null;
+  }
+
+  return data?.lyrics || null;
+}
 
 // ─── Discord Client ───────────────────────────────────────────────────────────
 const client = new Client({
@@ -597,24 +621,37 @@ async function handlePlay(guildId, voiceChannelId, textChannelId, query, request
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-//  LYRICS
+//  LYRICS (lyrics.ovh)
 // ══════════════════════════════════════════════════════════════════════════════
 
 async function handleLyrics(guildId, query, replyFn) {
-  if (!geniusClient) return replyFn({ content: '❌ Lyrics unavailable. Install: `npm install genius-lyrics`', ephemeral: true });
-  let searchQuery = query;
-  if (!searchQuery) {
+  let artist = '', title = '';
+
+  if (!query) {
     const player = riffy.players.get(guildId);
     if (!player?.current) return replyFn({ content: '❌ Nothing is playing.', ephemeral: true });
     const inf = player.current.info;
-    searchQuery = `${inf.title} ${inf.author}`.replace(/\[.*?\]|\(.*?\)/g, '').trim();
+    title  = (inf.title  ?? '').replace(/\[.*?\]|\(.*?\)/g, '').trim();
+    artist = (inf.author ?? '').replace(/\[.*?\]|\(.*?\)/g, '').trim();
+  } else if (query.includes('-')) {
+    const [a, ...rest] = query.split('-');
+    artist = a.trim();
+    title  = rest.join('-').trim();
+  } else {
+    title = query.trim();
   }
+
+  if (!title) return replyFn({ content: '❌ Song name nahi mila.', ephemeral: true });
+
   try {
-    const results = await geniusClient.songs.search(searchQuery);
-    if (!results?.length) return replyFn({ content: `❌ No lyrics found for **${searchQuery}**`, ephemeral: true });
-    const song   = results[0];
-    const lyrics = await song.lyrics();
-    if (!lyrics) return replyFn({ content: `❌ Lyrics unavailable for **${song.title}**`, ephemeral: true });
+    const lyrics = await fetchLyricsOvh(artist, title);
+    if (!lyrics) {
+      return replyFn({
+        content: `❌ Lyrics nahi mile **${artist ? artist + ' - ' : ''}${title}** ke liye`,
+        ephemeral: true
+      });
+    }
+
     const chunks = [];
     let cur = '';
     for (const line of lyrics.split('\n')) {
@@ -622,13 +659,14 @@ async function handleLyrics(guildId, query, replyFn) {
       else cur += (cur ? '\n' : '') + line;
     }
     if (cur) chunks.push(cur);
+
     await replyFn({
       components: [
         new ContainerBuilder()
           .addSectionComponents(
             new SectionBuilder()
-              .addTextDisplayComponents(new TextDisplayBuilder().setContent(`## 📝 ${song.title}\n**By:** ${song.artist?.name ?? 'Unknown'}\n\n${chunks[0]}`))
-              .setThumbnailAccessory(new ThumbnailBuilder().setURL(song.image ?? client.user.displayAvatarURL({ size: 1024 })).setDescription('Album Art'))
+              .addTextDisplayComponents(new TextDisplayBuilder().setContent(`## 📝 ${title}\n**By:** ${artist || 'Unknown'}\n\n${chunks[0]}`))
+              .setThumbnailAccessory(new ThumbnailBuilder().setURL(client.user.displayAvatarURL({ size: 1024 })).setDescription('Lyrics'))
           )
           .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
       ],
