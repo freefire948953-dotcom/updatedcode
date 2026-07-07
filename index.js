@@ -557,7 +557,7 @@ async function handlePlay(guildId, voiceChannelId, textChannelId, query, request
       const embedData = data?.embeds?.[0];
       const title = embedData?.data?.title ?? embedData?.title ?? 'Spotify';
       const desc  = embedData?.data?.description ?? embedData?.description ?? '';
-      return editReply({ components: [createSimpleContainer(title, desc, '🟢')], flags: MessageFlags.IsPersistent | MessageFlags.IsComponentsV2 });
+      return editReply({ components: [createSimpleContainer(title, desc, '🟢')], flags: MessageFlags.IsComponentsV2 });
     };
     await spotifyModule.handleSpotify(query, guildId, textChannelId, requesterId, spotifyReplyFn, makeSpotifyAdapter(guildId, voiceChannelId, textChannelId, requesterId));
     return;
@@ -581,7 +581,7 @@ async function handlePlay(guildId, voiceChannelId, textChannelId, query, request
     for (const t of resolve.tracks) { t.info.requester = requesterId; player.queue.add(t); }
     await editReply({
       components: [createSimpleContainer('Playlist Added', `📀 **${resolve.playlistInfo?.name ?? 'Playlist'}**\n🎵 ${resolve.tracks.length} tracks added to queue`, '✅')],
-      flags: MessageFlags.IsPersistent | MessageFlags.IsComponentsV2
+      flags: MessageFlags.IsComponentsV2
     });
   } else {
     const track = resolve.tracks[0];
@@ -590,7 +590,7 @@ async function handlePlay(guildId, voiceChannelId, textChannelId, query, request
     const src = detectSource(track.info);
     await editReply({
       components: [createSimpleContainer('Added to Queue', `${src.emoji} **[${track.info.title}](${track.info.uri})**\n👤 ${track.info.author ?? 'Unknown'} • ⏱️ ${formatTime(track.info.length)}`, '✅')],
-      flags: MessageFlags.IsPersistent | MessageFlags.IsComponentsV2
+      flags: MessageFlags.IsComponentsV2
     });
   }
   if (!player.playing && !player.paused) player.play();
@@ -632,7 +632,7 @@ async function handleLyrics(guildId, query, replyFn) {
           )
           .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
       ],
-      flags: MessageFlags.IsComponentsV2 | MessageFlags.IsPersistent, ephemeral: true
+      flags: MessageFlags.IsComponentsV2, ephemeral: true
     });
   } catch (e) {
     console.error('[Lyrics]', e.message);
@@ -675,14 +675,14 @@ riffy.on('nodeConnect', async (node) => {
       if (riffy.players.get(guildId)) continue;
       riffy.createConnection({ guildId, voiceChannel: data.voiceChannelId, textChannel: data.textChannelId, deaf: true });
       const textCh = guild.channels.cache.get(data.textChannelId);
-      if (textCh) await textCh.send({ components: [createSimpleContainer('Auto-Reconnected! 🔄', `Back online! Rejoined <#${data.voiceChannelId}> automatically.`, '✅')], flags: MessageFlags.IsPersistent | MessageFlags.IsComponentsV2 }).catch(() => {});
+      if (textCh) await textCh.send({ components: [createSimpleContainer('Auto-Reconnected! 🔄', `Back online! Rejoined <#${data.voiceChannelId}> automatically.`, '✅')], flags: MessageFlags.IsComponentsV2 }).catch(() => {});
       console.log(`✅ Auto-rejoined VC in guild ${guildId}`);
     } catch (e) { console.error(`[AutoReconnect] Guild ${guildId}:`, e.message); }
   }
 });
 
 riffy.on('nodeError',      (node, error) => { console.error(`❌ Node "${node.name}" error:`, error?.message ?? error); isLavalinkConnected = riffy.nodes?.some?.(n => n.connected) ?? false; });
-riffy.on('nodeDisconnect', (node)        => { console.warn(`⚠️  Node "${node.name}" disconnected — retrying in 5s`); isLavalinkConnected = riffy.nodes?.some?.(n => n.connected) ?? false; setTimeout(() => { try { node.connect?.(); } catch (_) {} }, 5000); });
+riffy.on('nodeDisconnect', (node)        => { console.warn(`⚠️  Node "${node.name}" disconnected`); isLavalinkConnected = riffy.nodes?.some?.(n => n.connected) ?? false; });
 
 riffy.on('trackStart', async (player, track) => {
   pushHistory(player.guildId, track);
@@ -693,7 +693,7 @@ riffy.on('trackStart', async (player, track) => {
   const old = nowPlayingMsgs.get(player.guildId);
   if (old) { try { await old.delete(); } catch (_) {} nowPlayingMsgs.delete(player.guildId); }
   try {
-    const msg = await channel.send({ components: [createNowPlayingContainer(player, track)], flags: MessageFlags.IsPersistent | MessageFlags.IsComponentsV2 });
+    const msg = await channel.send({ components: [createNowPlayingContainer(player, track)], flags: MessageFlags.IsComponentsV2 });
     nowPlayingMsgs.set(player.guildId, msg);
   } catch (e) { console.error('[trackStart]', e.message); }
 });
@@ -704,7 +704,7 @@ riffy.on('queueEnd', async (player) => {
   const channel   = client.channels.cache.get(player.textChannel);
   const lastTrack = player.current;
   const msg = nowPlayingMsgs.get(player.guildId);
-  if (msg && lastTrack) { try { await msg.edit({ components: [createNowPlayingContainer(player, lastTrack, true)], flags: MessageFlags.IsPersistent | MessageFlags.IsComponentsV2 }); } catch (_) {} }
+  if (msg && lastTrack) { try { await msg.edit({ components: [createNowPlayingContainer(player, lastTrack, true)], flags: MessageFlags.IsComponentsV2 }); } catch (_) {} }
   nowPlayingMsgs.delete(player.guildId);
 
   if (autoplayEnabled.has(player.guildId) && lastTrack) {
@@ -718,18 +718,18 @@ riffy.on('queueEnd', async (player) => {
         next.info.requester = lastTrack.info.requester;
         player.queue.add(next);
         player.play();
-        if (channel) await channel.send({ components: [createSimpleContainer('Autoplay', `🤖 Added **[${next.info.title}](${next.info.uri})**`, '🔁')], flags: MessageFlags.IsPersistent | MessageFlags.IsComponentsV2 });
+        if (channel) await channel.send({ components: [createSimpleContainer('Autoplay', `🤖 Added **[${next.info.title}](${next.info.uri})**`, '🔁')], flags: MessageFlags.IsComponentsV2 });
         return;
       }
     } catch (e) { console.error('[Autoplay]', e.message); }
   }
 
   if (queue247.has(player.guildId)) {
-    if (channel) await channel.send({ components: [createSimpleContainer('24/7 Mode', 'Queue ended — staying in VC', 'ℹ️')], flags: MessageFlags.IsPersistent | MessageFlags.IsComponentsV2 });
+    if (channel) await channel.send({ components: [createSimpleContainer('24/7 Mode', 'Queue ended — staying in VC', 'ℹ️')], flags: MessageFlags.IsComponentsV2 });
     return;
   }
 
-  if (channel) await channel.send({ components: [createSimpleContainer('Queue Ended', 'All songs played! Use `/play` to add more.', '✅')], flags: MessageFlags.IsPersistent | MessageFlags.IsComponentsV2 });
+  if (channel) await channel.send({ components: [createSimpleContainer('Queue Ended', 'All songs played! Use `/play` to add more.', '✅')], flags: MessageFlags.IsComponentsV2 });
   try { player.destroy(); } catch (_) {}
   activeFilters.delete(player.guildId);
   autoReconnect.delete(player.guildId);
@@ -819,6 +819,8 @@ client.on('guildDelete', async (guild) => {
   queue247.delete(guild.id); autoplayEnabled.delete(guild.id); djRoles.delete(guild.id);
   nowPlayingMsgs.delete(guild.id); songHistory.delete(guild.id); voteSkips.delete(guild.id);
   activeFilters.delete(guild.id); autoReconnect.delete(guild.id);
+  const p = riffy.players.get(guild.id);
+  if (p) { try { p.destroy(); } catch (_) {} }
   await sendGuildLog(guild, false);
 });
 
@@ -849,7 +851,7 @@ client.on('interactionCreate', async (interaction) => {
             interaction.user.id,
             async (msg) => interaction.reply({ content: msg, ephemeral: true }),
             async () => {
-              if (player.current) await interaction.message.edit({ components: [createNowPlayingContainer(player, player.current, true)], flags: MessageFlags.IsPersistent | MessageFlags.IsComponentsV2 }).catch(() => {});
+              if (player.current) await interaction.message.edit({ components: [createNowPlayingContainer(player, player.current, true)], flags: MessageFlags.IsComponentsV2 }).catch(() => {});
             }
           );
           break;
@@ -859,13 +861,13 @@ client.on('interactionCreate', async (interaction) => {
           const pause = interaction.customId === 'pause';
           await player.pause(pause);
           const nm = nowPlayingMsgs.get(player.guildId);
-          if (nm && player.current) await nm.edit({ components: [createNowPlayingContainer(player, player.current)], flags: MessageFlags.IsPersistent | MessageFlags.IsComponentsV2 }).catch(() => {});
+          if (nm && player.current) await nm.edit({ components: [createNowPlayingContainer(player, player.current)], flags: MessageFlags.IsComponentsV2 }).catch(() => {});
           await interaction.reply({ content: pause ? '⏸️ Paused' : '▶️ Resumed', ephemeral: true });
           break;
         }
 
         case 'skip': {
-          if (player.current) await interaction.message.edit({ components: [createNowPlayingContainer(player, player.current, true)], flags: MessageFlags.IsPersistent | MessageFlags.IsComponentsV2 }).catch(() => {});
+          if (player.current) await interaction.message.edit({ components: [createNowPlayingContainer(player, player.current, true)], flags: MessageFlags.IsComponentsV2 }).catch(() => {});
           player.stop();
           await interaction.reply({ content: '⏭️ Skipped', ephemeral: true });
           break;
@@ -875,19 +877,19 @@ client.on('interactionCreate', async (interaction) => {
           if (!player.current) return interaction.reply({ content: '❌ Nothing playing', ephemeral: true });
           const res = processVoteSkip(player, member.user.id);
           if (res.skip) {
-            if (player.current) await interaction.message.edit({ components: [createNowPlayingContainer(player, player.current, true)], flags: MessageFlags.IsPersistent | MessageFlags.IsComponentsV2 }).catch(() => {});
+            if (player.current) await interaction.message.edit({ components: [createNowPlayingContainer(player, player.current, true)], flags: MessageFlags.IsComponentsV2 }).catch(() => {});
             player.stop();
             await interaction.reply({ content: '🗳️ Vote passed! Skipping...', ephemeral: false });
           } else {
             const nm = nowPlayingMsgs.get(player.guildId);
-            if (nm && player.current) await nm.edit({ components: [createNowPlayingContainer(player, player.current)], flags: MessageFlags.IsPersistent | MessageFlags.IsComponentsV2 }).catch(() => {});
+            if (nm && player.current) await nm.edit({ components: [createNowPlayingContainer(player, player.current)], flags: MessageFlags.IsComponentsV2 }).catch(() => {});
             await interaction.reply({ content: `🗳️ **${res.current}/${res.required}** votes to skip`, ephemeral: true });
           }
           break;
         }
 
         case 'stop': {
-          if (player.current) await interaction.message.edit({ components: [createNowPlayingContainer(player, player.current, true)], flags: MessageFlags.IsPersistent | MessageFlags.IsComponentsV2 }).catch(() => {});
+          if (player.current) await interaction.message.edit({ components: [createNowPlayingContainer(player, player.current, true)], flags: MessageFlags.IsComponentsV2 }).catch(() => {});
           nowPlayingMsgs.delete(player.guildId);
           activeFilters.delete(player.guildId);
           try { player.destroy(); } catch (_) {}
@@ -907,7 +909,7 @@ client.on('interactionCreate', async (interaction) => {
           const next  = modes[(modes.indexOf(player.loop ?? 'none') + 1) % modes.length];
           player.setLoop(next);
           const nm = nowPlayingMsgs.get(player.guildId);
-          if (nm && player.current) await nm.edit({ components: [createNowPlayingContainer(player, player.current)], flags: MessageFlags.IsPersistent | MessageFlags.IsComponentsV2 }).catch(() => {});
+          if (nm && player.current) await nm.edit({ components: [createNowPlayingContainer(player, player.current)], flags: MessageFlags.IsComponentsV2 }).catch(() => {});
           await interaction.reply({ content: `🔁 Loop: **${next}**`, ephemeral: true });
           break;
         }
@@ -916,18 +918,18 @@ client.on('interactionCreate', async (interaction) => {
           autoplayEnabled.has(player.guildId) ? autoplayEnabled.delete(player.guildId) : autoplayEnabled.add(player.guildId);
           const on = autoplayEnabled.has(player.guildId);
           const nm = nowPlayingMsgs.get(player.guildId);
-          if (nm && player.current) await nm.edit({ components: [createNowPlayingContainer(player, player.current)], flags: MessageFlags.IsPersistent | MessageFlags.IsComponentsV2 }).catch(() => {});
+          if (nm && player.current) await nm.edit({ components: [createNowPlayingContainer(player, player.current)], flags: MessageFlags.IsComponentsV2 }).catch(() => {});
           await interaction.reply({ content: on ? '✅ Autoplay ON' : '❌ Autoplay OFF', ephemeral: true });
           break;
         }
 
         case 'filters': {
-          await interaction.reply({ components: [createFiltersContainer(interaction.guildId)], flags: MessageFlags.IsComponentsV2 | MessageFlags.IsPersistent, ephemeral: true });
+          await interaction.reply({ components: [createFiltersContainer(interaction.guildId)], flags: MessageFlags.IsComponentsV2, ephemeral: true });
           break;
         }
 
         case 'queue': {
-          await interaction.reply({ components: [createQueueContainer(player)], flags: MessageFlags.IsComponentsV2 | MessageFlags.IsPersistent, ephemeral: true });
+          await interaction.reply({ components: [createQueueContainer(player)], flags: MessageFlags.IsComponentsV2, ephemeral: true });
           break;
         }
 
@@ -1028,13 +1030,13 @@ client.on('interactionCreate', async (interaction) => {
       const p = riffy.players.get(guild.id);
       if (!p) return interaction.reply({ content: '❌ No active player', ephemeral: true });
       if (!p.queue.length && !p.current) return interaction.reply({ content: '❌ Queue is empty', ephemeral: true });
-      await interaction.reply({ components: [createQueueContainer(p)], flags: MessageFlags.IsComponentsV2 | MessageFlags.IsPersistent });
+      await interaction.reply({ components: [createQueueContainer(p)], flags: MessageFlags.IsComponentsV2 });
     }
 
     else if (commandName === 'nowplaying') {
       const p = riffy.players.get(guild.id);
       if (!p?.current) return interaction.reply({ content: '❌ Nothing playing', ephemeral: true });
-      await interaction.reply({ components: [createNowPlayingContainer(p, p.current)], flags: MessageFlags.IsComponentsV2 | MessageFlags.IsPersistent });
+      await interaction.reply({ components: [createNowPlayingContainer(p, p.current)], flags: MessageFlags.IsComponentsV2 });
     }
 
     else if (commandName === 'shuffle') {
@@ -1115,14 +1117,14 @@ client.on('interactionCreate', async (interaction) => {
         if (!ok) { fSet.delete(name); return interaction.reply({ content: '❌ Failed to apply filter.', ephemeral: true }); }
         await interaction.reply({ components: [createSimpleContainer('Filter Applied', `\`${name}\` enabled! 🎵\nActive: ${[...fSet].map(f => `\`${f}\``).join(' ')}`, '🎛️')], flags: MessageFlags.IsComponentsV2 });
       }
-      if (p.current) { const nm = nowPlayingMsgs.get(guild.id); if (nm) await nm.edit({ components: [createNowPlayingContainer(p, p.current)], flags: MessageFlags.IsPersistent | MessageFlags.IsComponentsV2 }).catch(() => {}); }
+      if (p.current) { const nm = nowPlayingMsgs.get(guild.id); if (nm) await nm.edit({ components: [createNowPlayingContainer(p, p.current)], flags: MessageFlags.IsComponentsV2 }).catch(() => {}); }
     }
 
     else if (commandName === 'clearfilters') {
       const p = getPlayer(); if (!p) return;
       await clearFilters(p);
       await interaction.reply({ components: [createSimpleContainer('Filters Cleared', 'All audio effects removed', '🎛️')], flags: MessageFlags.IsComponentsV2 });
-      if (p.current) { const nm = nowPlayingMsgs.get(guild.id); if (nm) await nm.edit({ components: [createNowPlayingContainer(p, p.current)], flags: MessageFlags.IsPersistent | MessageFlags.IsComponentsV2 }).catch(() => {}); }
+      if (p.current) { const nm = nowPlayingMsgs.get(guild.id); if (nm) await nm.edit({ components: [createNowPlayingContainer(p, p.current)], flags: MessageFlags.IsComponentsV2 }).catch(() => {}); }
     }
 
     else if (commandName === 'lyrics') {
@@ -1131,7 +1133,7 @@ client.on('interactionCreate', async (interaction) => {
     }
 
     else if (commandName === 'history') {
-      await interaction.reply({ components: [createHistoryContainer(guild.id)], flags: MessageFlags.IsComponentsV2 | MessageFlags.IsPersistent, ephemeral: true });
+      await interaction.reply({ components: [createHistoryContainer(guild.id)], flags: MessageFlags.IsComponentsV2, ephemeral: true });
     }
 
     else if (commandName === 'djrole') {
@@ -1239,13 +1241,13 @@ client.on('messageCreate', async (message) => {
     if (command === 'np' || command === 'nowplaying') {
       const p = riffy.players.get(message.guild.id);
       if (!p?.current) return reply('Error', 'Nothing playing.', '❌');
-      return message.reply({ components: [createNowPlayingContainer(p, p.current)], flags: MessageFlags.IsComponentsV2 | MessageFlags.IsPersistent }).catch(() => {});
+      return message.reply({ components: [createNowPlayingContainer(p, p.current)], flags: MessageFlags.IsComponentsV2 }).catch(() => {});
     }
 
     if (command === 'queue' || command === 'q') {
       const p = riffy.players.get(message.guild.id);
       if (!p) return reply('Error', 'Nothing playing.', '❌');
-      return message.reply({ components: [createQueueContainer(p)], flags: MessageFlags.IsComponentsV2 | MessageFlags.IsPersistent }).catch(() => {});
+      return message.reply({ components: [createQueueContainer(p)], flags: MessageFlags.IsComponentsV2 }).catch(() => {});
     }
 
     if (command === 'play' || command === 'p' || !command) {
