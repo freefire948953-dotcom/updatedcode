@@ -364,6 +364,166 @@ function createNowPlayingContainer(player, track, disabled = false) {
     );
 }
 
+function createSimpleContainer(title, description, emoji = 'ℹ️') {
+  return new ContainerBuilder()
+    .addSectionComponents(
+      new SectionBuilder()
+        .addTextDisplayComponents(
+          new TextDisplayBuilder().setContent(`## ${emoji} ${title}\n${description}`)
+        )
+        .setThumbnailAccessory(
+          new ThumbnailBuilder()
+            .setURL(client.user.displayAvatarURL({ size: 1024 }))
+            .setDescription(title)
+        )
+    )
+    .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
+}
+
+function createQueueContainer(player) {
+  const queue   = player.queue ?? [];
+  const current = player.current;
+  let desc = '';
+  if (current?.info) {
+    const src = detectSource(current.info);
+    desc += `**🎵 Now Playing:**\n**[${current.info.title}](${current.info.uri})**\n${current.info.author ?? 'Unknown'} • ${formatTime(current.info.length)} • ${src.emoji} ${src.name} • <@${current.info.requester}>\n\n`;
+  }
+  if (queue.length > 0) {
+    desc += `**📋 Up Next:**\n`;
+    queue.slice(0, 10).forEach((t, i) => {
+      const inf = t.info ?? {};
+      const src = detectSource(inf);
+      desc += `\`${i + 1}.\` **[${inf.title}](${inf.uri})**\n${inf.author ?? 'Unknown'} • ${formatTime(inf.length)} • ${src.emoji} • <@${inf.requester}>\n`;
+    });
+    if (queue.length > 10) desc += `\n*...and ${queue.length - 10} more track(s)*`;
+  } else if (!current) {
+    desc = 'Queue is empty. Use `/play` to add songs!';
+  }
+  const fSet = activeFilters.get(player.guildId) ?? new Set();
+  desc += `\n\n🔁 Loop: \`${(!player.loop || player.loop === 'none') ? 'off' : player.loop}\`` +
+    ` │ 🤖 Autoplay: \`${autoplayEnabled.has(player.guildId) ? 'on' : 'off'}\`` +
+    ` │ 🔊 Vol: \`${player.volume ?? 100}%\`` +
+    ` │ 🎵 Total: \`${queue.length + (current ? 1 : 0)}\`` +
+    (fSet.size > 0 ? ` │ 🎛️ \`${[...fSet].join(', ')}\`` : '');
+  return new ContainerBuilder()
+    .addSectionComponents(
+      new SectionBuilder()
+        .addTextDisplayComponents(new TextDisplayBuilder().setContent(`## 📋 Queue\n${desc}`))
+        .setThumbnailAccessory(new ThumbnailBuilder().setURL(client.user.displayAvatarURL({ size: 1024 })).setDescription('Queue'))
+    )
+    .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
+}
+
+function createFiltersContainer(guildId) {
+  const fSet = activeFilters.get(guildId) ?? new Set();
+  const activeStr = fSet.size > 0 ? [...fSet].map(f => `\`${f}\``).join(' ') : '`none`';
+  const list =
+    `🎸 \`bassboost\`    — Heavy bass enhancement\n` +
+    `🌙 \`nightcore\`    — Sped up + higher pitch\n` +
+    `🌊 \`vaporwave\`    — Slowed + lower pitch\n` +
+    `🎧 \`8d\`           — Spatial 8D audio\n` +
+    `😴 \`slowedreverb\` — Slowed with reverb\n` +
+    `🔆 \`treble\`       — Treble boost\n` +
+    `🎤 \`pop\`          — Pop equalizer\n` +
+    `🌀 \`soft\`         — Low-pass smooth\n` +
+    `📢 \`loud\`         — All bands boosted\n` +
+    `🦻 \`earrape\`      — Max boost (very loud!)\n` +
+    `🎤 \`karaoke\`      — Vocal remover\n` +
+    `📻 \`distortion\`   — Distortion effect\n` +
+    `🐉 \`china\`        — China effect\n` +
+    `🐿️ \`chipmunk\`     — Chipmunk pitch\n` +
+    `🎵 \`vibrato\`      — Vibrato effect\n` +
+    `〰️ \`tremolo\`      — Tremolo effect\n\n` +
+    `**Active:** ${activeStr}\n\n` +
+    `Use \`/filter <name>\` to toggle • \`/clearfilters\` to reset`;
+  return new ContainerBuilder()
+    .addSectionComponents(
+      new SectionBuilder()
+        .addTextDisplayComponents(new TextDisplayBuilder().setContent(`## 🎛️ Audio Filters\n${list}`))
+        .setThumbnailAccessory(new ThumbnailBuilder().setURL(client.user.displayAvatarURL({ size: 1024 })).setDescription('Filters'))
+    )
+    .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
+}
+
+function createHistoryContainer(guildId) {
+  const hist = songHistory.get(guildId) ?? [];
+  const desc = hist.length === 0
+    ? 'No songs played yet this session.'
+    : hist.slice(0, 15).map((t, i) => {
+        const inf = t.info ?? {};
+        const src = detectSource(inf);
+        return `\`${i + 1}.\` **[${inf.title}](${inf.uri})**\n${inf.author ?? 'Unknown'} • ${formatTime(inf.length)} • ${src.emoji} <@${inf.requester}>`;
+      }).join('\n');
+  return new ContainerBuilder()
+    .addSectionComponents(
+      new SectionBuilder()
+        .addTextDisplayComponents(new TextDisplayBuilder().setContent(`## 🕒 Song History\n${desc}`))
+        .setThumbnailAccessory(new ThumbnailBuilder().setURL(client.user.displayAvatarURL({ size: 1024 })).setDescription('History'))
+    )
+    .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
+}
+
+function createStatsContainer() {
+  const mem = (process.memoryUsage().heapUsed / 1024 / 1024).toFixed(2);
+  return new ContainerBuilder()
+    .addSectionComponents(
+      new SectionBuilder()
+        .addTextDisplayComponents(
+          new TextDisplayBuilder().setContent(
+            `## 📊 Bot Statistics\n` +
+            `🏠 **Servers:** \`${client.guilds.cache.size}\`\n` +
+            `👥 **Users:** \`${client.guilds.cache.reduce((a, g) => a + g.memberCount, 0)}\`\n` +
+            `🎵 **Active Players:** \`${riffy.players?.size ?? 0}\`\n` +
+            `⏱️ **Uptime:** \`${formatTime(client.uptime)}\`\n` +
+            `📶 **Ping:** \`${client.ws.ping}ms\`\n` +
+            `🧠 **Memory:** \`${mem} MB\`\n` +
+            `🔊 **Audio Quality:** \`Hi-Fi Opus (Max)\`\n` +
+            `🔗 **Lavalink:** ${isLavalinkConnected ? '🟢 Connected' : '🔴 Disconnected'}`
+          )
+        )
+        .setThumbnailAccessory(new ThumbnailBuilder().setURL(client.user.displayAvatarURL({ size: 1024 })).setDescription('Stats'))
+    )
+    .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
+}
+
+function createHelpContainer() {
+  return new ContainerBuilder()
+    .addSectionComponents(
+      new SectionBuilder()
+        .addTextDisplayComponents(
+          new TextDisplayBuilder().setContent(
+            `## 🎵 ${client.user.username} — Help\n` +
+            `Hi-Fi music from **YouTube • Spotify • SoundCloud • Apple Music**\n` +
+            `Lavalink: ${isLavalinkConnected ? '🟢 Online' : '🔴 Offline'} | Made by **SKY x LIVE**\n\n` +
+            `**🎵 Playback**\n` +
+            `\`/play\` \`/pause\` \`/resume\` \`/skip\` \`/stop\`\n` +
+            `\`/nowplaying\` \`/voteskip\` \`/247\` \`/autoplay\`\n\n` +
+            `**📋 Queue**\n` +
+            `\`/queue\` \`/shuffle\` \`/loop\` \`/clearqueue\`\n` +
+            `\`/remove\` \`/move\` \`/volume\` \`/history\`\n\n` +
+            `**🎛️ Audio Filters (15+)**\n` +
+            `\`/filter\` — \`bassboost\` \`nightcore\` \`vaporwave\`\n` +
+            `\`8d\` \`slowedreverb\` \`karaoke\` \`chipmunk\` \`vibrato\` \`tremolo\` …\n` +
+            `\`/clearfilters\` — Remove all effects\n\n` +
+            `**🛡️ DJ / Admin**\n` +
+            `\`/djrole\` \`/lyrics\`\n\n` +
+            `**ℹ️ Utility**\n` +
+            `\`/stats\` \`/ping\` \`/invite\` \`/support\` \`/help\`\n\n` +
+            `💡 Paste any Spotify/Apple Music/SoundCloud link directly!`
+          )
+        )
+        .setThumbnailAccessory(new ThumbnailBuilder().setURL(client.user.displayAvatarURL({ size: 1024 })).setDescription('Help'))
+    )
+    .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
+    .addActionRowComponents(
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setLabel('Invite Me').setStyle(ButtonStyle.Link)
+          .setURL(`https://discord.com/api/oauth2/authorize?client_id=${client.user.id}&permissions=3165184&scope=bot%20applications.commands`),
+        new ButtonBuilder().setLabel('Support').setStyle(ButtonStyle.Link).setURL(config.supportServer)
+      )
+    );
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 //  PREVIOUS SONG HANDLER
 // ══════════════════════════════════════════════════════════════════════════════
@@ -584,7 +744,7 @@ riffy.on('queueEnd', async (player) => {
 //  CLIENT EVENTS
 // ══════════════════════════════════════════════════════════════════════════════
 
-client.on('clientReady', async () => {
+client.on('ready', async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
   try { riffy.init(client.user.id); } catch (e) { console.error('[Riffy Init]', e); }
   const types = { PLAYING: ActivityType.Playing, LISTENING: ActivityType.Listening, WATCHING: ActivityType.Watching, STREAMING: ActivityType.Streaming, COMPETING: ActivityType.Competing };
