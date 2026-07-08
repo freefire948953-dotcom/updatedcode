@@ -13,8 +13,7 @@ const {
   Client, GatewayIntentBits, ActivityType,
   ActionRowBuilder, ButtonBuilder, ButtonStyle,
   ContainerBuilder, SectionBuilder, TextDisplayBuilder,
-  ThumbnailBuilder, SeparatorBuilder, SeparatorSpacingSize, MessageFlags,
-  MediaGalleryBuilder, MediaGalleryItemBuilder
+  ThumbnailBuilder, SeparatorBuilder, SeparatorSpacingSize, MessageFlags
 } = require('discord.js');
 const { Riffy } = require('riffy');
 const config  = require('./config.js');
@@ -32,24 +31,11 @@ const fetch = (...a) => import('node-fetch').then(({ default: f }) => f(...a));
 spotifyModule.init({ spotifyClient: SpotifyClient(fetch) });
 
 // ─── Lyrics ───────────────────────────────────────────────────────────────────
-// ─── Lyrics (lyrics.ovh) ──────────────────────────────────────────────────────
-async function fetchLyricsOvh(artist, title) {
-  const url = `https://api.lyrics.ovh/v1/${encodeURIComponent(artist)}/${encodeURIComponent(title)}`;
-  const res = await fetch(url);
-  const contentType = res.headers.get('content-type') || '';
-  const rawText = await res.text();
-
-  if (!contentType.includes('application/json')) {
-    console.error('[LyricsOvh] Non-JSON response:', rawText.slice(0, 200));
-    return null;
-  }
-
-  let data;
-  try { data = JSON.parse(rawText); }
-  catch (e) { console.error('[LyricsOvh] Parse failed:', e.message); return null; }
-
-  return data?.lyrics || null;
-}
+let geniusClient = null;
+try {
+  const Genius = require('genius-lyrics');
+  geniusClient = new Genius.Client();
+} catch (_) { console.warn('⚠️  genius-lyrics not installed'); }
 
 // ─── Discord Client ───────────────────────────────────────────────────────────
 const client = new Client({
@@ -107,24 +93,6 @@ const songHistory     = new Map();
 const voteSkips       = new Map();
 const activeFilters   = new Map();
 const autoReconnect   = new Map();
-const progressIntervals = new Map();
-
-function clearProgressInterval(guildId) {
-  const iv = progressIntervals.get(guildId);
-  if (iv) { clearInterval(iv); progressIntervals.delete(guildId); }
-}
-
-function startProgressInterval(player) {
-  clearProgressInterval(player.guildId);
-  const iv = setInterval(async () => {
-    try {
-      const msg = nowPlayingMsgs.get(player.guildId);
-      if (!msg || !player.current || player.paused) return;
-      await msg.edit({ components: [createNowPlayingContainer(player, player.current)], flags: MessageFlags.IsComponentsV2 }).catch(() => {});
-    } catch (e) { console.error('[ProgressInterval]', e.message); }
-  }, 10000);
-  progressIntervals.set(player.guildId, iv);
-}
 
 // ─── Audio Filters ────────────────────────────────────────────────────────────
 const FILTERS = {
@@ -307,76 +275,83 @@ function makeSpotifyAdapter(guildId, voiceChannelId, textChannelId, requesterId)
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-//  BACKGROUND IMAGE + PROGRESS BAR HELPER
-// ══════════════════════════════════════════════════════════════════════════════
-
-const NOWPLAYING_BG = "https://github.com/freefire948953-dotcom/updatedcode/blob/main/Music%20background%20template%20_%F0%9F%94%A5.jpg?raw=true";
-
-function buildProgressBar(current, total, length = 18) {
-  const ratio = total > 0 ? Math.min(current / total, 1) : 0;
-  const pos = Math.round(ratio * length);
-  let bar = '';
-  for (let i = 0; i < length; i++) {
-    bar += i === pos ? '🔘' : '▬';
-  }
-  return bar;
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
 //  UI BUILDERS — Components V2
 // ══════════════════════════════════════════════════════════════════════════════
 
 function createNowPlayingContainer(player, track, disabled = false) {
   const info      = track.info ?? {};
-  const isPaused  = player.paused;
-  const loopEmoji = player.loop === 'track' ? '🔂' : player.loop === 'queue' ? '🔁' : '🔁';
-  const src       = detectSource(info);
-  const elapsed   = player.position ?? 0;
-  const total     = info.length ?? 0;
   const thumb     = resolveThumbnail(info);
+  const isPaused  = player.paused;
+  const loopEmoji = player.loop === 'track' ? '🔂' : player.loop === 'queue' ? '🔁' : '▶️';
+  const votes     = voteSkips.get(player.guildId)?.size ?? 0;
+  const fSet      = activeFilters.get(player.guildId) ?? new Set();
+  const filterStr = fSet.size > 0 ? [...fSet].map(f => `\`${f}\``).join(' ') : '`none`';
+  const src       = detectSource(info);
 
   return new ContainerBuilder()
-    // Dynamic song thumbnail / album art — changes with every track
-    .addMediaGalleryComponents(
-      new MediaGalleryBuilder().addItems(
-        new MediaGalleryItemBuilder()
-          .setURL(thumb)
-          .setDescription(info.title ?? 'Song Thumbnail')
-      )
+    .addSectionComponents(
+      new SectionBuilder()
+        .addTextDisplayComponents(
+          new TextDisplayBuilder().setContent(
+            `## 🎵 Now Playing\n` +
+            `### [${info.title ?? 'Unknown Title'}](${info.uri ?? 'https://youtube.com'})\n` +
+            `👤 ${info.author ?? 'Unknown'}  •  ${src.emoji} **${src.name}**`
+          )
+        )
+        .setThumbnailAccessory(
+          new ThumbnailBuilder().setURL(thumb).setDescription(info.title ?? 'Cover')
+        )
     )
+    .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
     .addTextDisplayComponents(
       new TextDisplayBuilder().setContent(
-        `**Song :** ${info.title ?? 'Unknown Title'}\n` +
-        `**Author :** ${info.author ?? 'Unknown'}\n` +
-        `${src.emoji} ${src.name}`
-      )
-    )
-    .addTextDisplayComponents(
-      new TextDisplayBuilder().setContent(
-        `\`${formatTime(elapsed)}\` ${buildProgressBar(elapsed, total)} \`${formatTime(total)}\``
+        `⏱️ \`${formatTime(info.length)}\`  •  ` +
+        `${loopEmoji} Loop: \`${player.loop ?? 'none'}\`  •  ` +
+        `🔊 Vol: \`${player.volume ?? 100}%\`\n` +
+        `🎛️ Filters: ${filterStr}\n` +
+        `🙋 Requested by <@${info.requester}>`
       )
     )
     .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
-    // Main strip — exactly like the wallpaper order
+    // Row 1: Previous, Pause/Resume, Skip, VoteSkip, Stop
     .addActionRowComponents(
       new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('previous')
+          .setEmoji('⏮️')
+          .setStyle(ButtonStyle.Secondary)
+          .setDisabled(disabled),
+        new ButtonBuilder()
+          .setCustomId(isPaused ? 'resume' : 'pause')
+          .setEmoji(isPaused ? '▶️' : '⏸️')
+          .setStyle(isPaused ? ButtonStyle.Success : ButtonStyle.Primary)
+          .setDisabled(disabled),
+        new ButtonBuilder().setCustomId('skip').setEmoji('⏭️').setStyle(ButtonStyle.Primary).setDisabled(disabled),
+        new ButtonBuilder()
+          .setCustomId('voteskip')
+          .setLabel(votes > 0 ? `Vote (${votes})` : 'Vote Skip')
+          .setEmoji('🗳️').setStyle(ButtonStyle.Secondary).setDisabled(disabled),
+        new ButtonBuilder().setCustomId('stop').setEmoji('⏹️').setStyle(ButtonStyle.Danger).setDisabled(disabled)
+      )
+    )
+    // Row 2: Loop, Shuffle, Autoplay, Filters, Queue, Lyrics
+    .addActionRowComponents(
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('loop').setEmoji('🔁')
+          .setStyle(player.loop && player.loop !== 'none' ? ButtonStyle.Success : ButtonStyle.Secondary)
+          .setDisabled(disabled),
         new ButtonBuilder().setCustomId('shuffle').setEmoji('🔀').setStyle(ButtonStyle.Secondary).setDisabled(disabled),
-        new ButtonBuilder().setCustomId('previous').setEmoji('⏮️').setStyle(ButtonStyle.Secondary).setDisabled(disabled),
-        new ButtonBuilder().setCustomId(isPaused ? 'resume' : 'pause').setEmoji(isPaused ? '▶️' : '⏸️').setStyle(ButtonStyle.Primary).setDisabled(disabled),
-        new ButtonBuilder().setCustomId('skip').setEmoji('⏭️').setStyle(ButtonStyle.Secondary).setDisabled(disabled),
-        new ButtonBuilder().setCustomId('loop').setEmoji(loopEmoji).setStyle(player.loop && player.loop !== 'none' ? ButtonStyle.Success : ButtonStyle.Secondary).setDisabled(disabled)
+        new ButtonBuilder()
+          .setCustomId('autoplay').setLabel('Autoplay')
+          .setEmoji(autoplayEnabled.has(player.guildId) ? '✅' : '❌')
+          .setStyle(autoplayEnabled.has(player.guildId) ? ButtonStyle.Success : ButtonStyle.Secondary)
+          .setDisabled(disabled),
+        new ButtonBuilder().setCustomId('filters').setEmoji('🎛️').setLabel('Filters').setStyle(ButtonStyle.Secondary).setDisabled(disabled),
+        new ButtonBuilder().setCustomId('queue').setEmoji('📋').setLabel('Queue').setStyle(ButtonStyle.Secondary).setDisabled(disabled)
       )
     )
-    // Secondary row — everything else, kept out of the way
-    .addActionRowComponents(
-      new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('voteskip').setEmoji('🗳️').setStyle(ButtonStyle.Secondary).setDisabled(disabled),
-        new ButtonBuilder().setCustomId('stop').setEmoji('⏹️').setStyle(ButtonStyle.Danger).setDisabled(disabled),
-        new ButtonBuilder().setCustomId('autoplay').setEmoji(autoplayEnabled.has(player.guildId) ? '✅' : '❌').setLabel('Auto').setStyle(autoplayEnabled.has(player.guildId) ? ButtonStyle.Success : ButtonStyle.Secondary).setDisabled(disabled),
-        new ButtonBuilder().setCustomId('filters').setEmoji('🎛️').setStyle(ButtonStyle.Secondary).setDisabled(disabled),
-        new ButtonBuilder().setCustomId('queue').setEmoji('📋').setStyle(ButtonStyle.Secondary).setDisabled(disabled)
-      )
-    )
+    // Row 3: Lyrics
     .addActionRowComponents(
       new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('lyrics').setEmoji('📝').setLabel('Lyrics').setStyle(ButtonStyle.Secondary).setDisabled(disabled)
