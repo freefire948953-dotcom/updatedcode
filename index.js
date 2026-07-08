@@ -107,6 +107,24 @@ const songHistory     = new Map();
 const voteSkips       = new Map();
 const activeFilters   = new Map();
 const autoReconnect   = new Map();
+const progressIntervals = new Map();
+
+function clearProgressInterval(guildId) {
+  const iv = progressIntervals.get(guildId);
+  if (iv) { clearInterval(iv); progressIntervals.delete(guildId); }
+}
+
+function startProgressInterval(player) {
+  clearProgressInterval(player.guildId);
+  const iv = setInterval(async () => {
+    try {
+      const msg = nowPlayingMsgs.get(player.guildId);
+      if (!msg || !player.current || player.paused) return;
+      await msg.edit({ components: [createNowPlayingContainer(player, player.current)], flags: MessageFlags.IsComponentsV2 }).catch(() => {});
+    } catch (e) { console.error('[ProgressInterval]', e.message); }
+  }, 10000);
+  progressIntervals.set(player.guildId, iv);
+}
 
 // ─── Audio Filters ────────────────────────────────────────────────────────────
 const FILTERS = {
@@ -315,20 +333,22 @@ function createNowPlayingContainer(player, track, disabled = false) {
   const src       = detectSource(info);
   const elapsed   = player.position ?? 0;
   const total     = info.length ?? 0;
+  const thumb     = resolveThumbnail(info);
 
   return new ContainerBuilder()
-    // Big banner image on top — album-art / mood background
+    // Dynamic song thumbnail / album art — changes with every track
     .addMediaGalleryComponents(
       new MediaGalleryBuilder().addItems(
         new MediaGalleryItemBuilder()
-          .setURL(NOWPLAYING_BG)
-          .setDescription('Now Playing Background')
+          .setURL(thumb)
+          .setDescription(info.title ?? 'Song Thumbnail')
       )
     )
     .addTextDisplayComponents(
       new TextDisplayBuilder().setContent(
-        `### [${info.title ?? 'Unknown Title'}](${info.uri ?? 'https://youtube.com'})\n` +
-        `${src.emoji} ${info.author ?? 'Unknown'} • ${src.name}`
+        `**Song :** ${info.title ?? 'Unknown Title'}\n` +
+        `**Author :** ${info.author ?? 'Unknown'}\n` +
+        `${src.emoji} ${src.name}`
       )
     )
     .addTextDisplayComponents(
