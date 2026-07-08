@@ -1,10 +1,9 @@
 // ╔══════════════════════════════════════════════════════════════════════╗
-// ║              SKY x MUSIC BOT — index.js  v3.2                      ║
+// ║              SKY x MUSIC BOT — index.js  v3.1                      ║
 // ║  Platforms : YouTube · Spotify · SoundCloud · Apple Music          ║
 // ║  Audio     : Hi-Fi Opus · 15+ Filters · 8D · Bass · Nightcore      ║
 // ║  Features  : Queue · Loop · Shuffle · 24/7 · Autoplay              ║
-// ║              DJ Role · Vote Skip · Lyrics (lyrics.ovh) · History   ║
-// ║              Previous                                               ║
+// ║              DJ Role · Vote Skip · Lyrics · History · Previous      ║
 // ║  UI        : Components V2 — Clean & Modern                         ║
 // ╚══════════════════════════════════════════════════════════════════════╝
 
@@ -14,7 +13,8 @@ const {
   Client, GatewayIntentBits, ActivityType,
   ActionRowBuilder, ButtonBuilder, ButtonStyle,
   ContainerBuilder, SectionBuilder, TextDisplayBuilder,
-  ThumbnailBuilder, SeparatorBuilder, SeparatorSpacingSize, MessageFlags
+  ThumbnailBuilder, SeparatorBuilder, SeparatorSpacingSize, MessageFlags,
+  MediaGalleryBuilder, MediaGalleryItemBuilder
 } = require('discord.js');
 const { Riffy } = require('riffy');
 const config  = require('./config.js');
@@ -31,32 +31,22 @@ const SpotifyClient = require('spotify-url-info');
 const fetch = (...a) => import('node-fetch').then(({ default: f }) => f(...a));
 spotifyModule.init({ spotifyClient: SpotifyClient(fetch) });
 
+// ─── Lyrics ───────────────────────────────────────────────────────────────────
 // ─── Lyrics (lyrics.ovh) ──────────────────────────────────────────────────────
 async function fetchLyricsOvh(artist, title) {
   const url = `https://api.lyrics.ovh/v1/${encodeURIComponent(artist)}/${encodeURIComponent(title)}`;
-  let res;
-  try {
-    res = await fetch(url);
-  } catch (e) {
-    console.error('[LyricsOvh] Network error:', e.message);
-    return null;
-  }
-
+  const res = await fetch(url);
   const contentType = res.headers.get('content-type') || '';
   const rawText = await res.text();
 
   if (!contentType.includes('application/json')) {
-    console.error('[LyricsOvh] Non-JSON response (likely HTML error page):', rawText.slice(0, 200));
+    console.error('[LyricsOvh] Non-JSON response:', rawText.slice(0, 200));
     return null;
   }
 
   let data;
-  try {
-    data = JSON.parse(rawText);
-  } catch (e) {
-    console.error('[LyricsOvh] Parse failed:', e.message);
-    return null;
-  }
+  try { data = JSON.parse(rawText); }
+  catch (e) { console.error('[LyricsOvh] Parse failed:', e.message); return null; }
 
   return data?.lyrics || null;
 }
@@ -299,246 +289,77 @@ function makeSpotifyAdapter(guildId, voiceChannelId, textChannelId, requesterId)
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+//  BACKGROUND IMAGE + PROGRESS BAR HELPER
+// ══════════════════════════════════════════════════════════════════════════════
+
+const NOWPLAYING_BG = "https://github.com/freefire948953-dotcom/updatedcode/blob/main/Music%20background%20template%20_%F0%9F%94%A5.jpg?raw=true";
+
+function buildProgressBar(current, total, length = 18) {
+  const ratio = total > 0 ? Math.min(current / total, 1) : 0;
+  const pos = Math.round(ratio * length);
+  let bar = '';
+  for (let i = 0; i < length; i++) {
+    bar += i === pos ? '🔘' : '▬';
+  }
+  return bar;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 //  UI BUILDERS — Components V2
 // ══════════════════════════════════════════════════════════════════════════════
 
 function createNowPlayingContainer(player, track, disabled = false) {
   const info      = track.info ?? {};
-  const thumb     = resolveThumbnail(info);
   const isPaused  = player.paused;
-  const loopEmoji = player.loop === 'track' ? '🔂' : player.loop === 'queue' ? '🔁' : '▶️';
-  const votes     = voteSkips.get(player.guildId)?.size ?? 0;
-  const fSet      = activeFilters.get(player.guildId) ?? new Set();
-  const filterStr = fSet.size > 0 ? [...fSet].map(f => `\`${f}\``).join(' ') : '`none`';
+  const loopEmoji = player.loop === 'track' ? '🔂' : player.loop === 'queue' ? '🔁' : '🔁';
   const src       = detectSource(info);
+  const elapsed   = player.position ?? 0;
+  const total     = info.length ?? 0;
 
   return new ContainerBuilder()
-    .addSectionComponents(
-      new SectionBuilder()
-        .addTextDisplayComponents(
-          new TextDisplayBuilder().setContent(
-            `## 🎵 Now Playing\n` +
-            `### [${info.title ?? 'Unknown Title'}](${info.uri ?? 'https://youtube.com'})\n` +
-            `👤 ${info.author ?? 'Unknown'}  •  ${src.emoji} **${src.name}**`
-          )
-        )
-        .setThumbnailAccessory(
-          new ThumbnailBuilder().setURL(thumb).setDescription(info.title ?? 'Cover')
-        )
+    // Big banner image on top — album-art / mood background
+    .addMediaGalleryComponents(
+      new MediaGalleryBuilder().addItems(
+        new MediaGalleryItemBuilder()
+          .setURL(NOWPLAYING_BG)
+          .setDescription('Now Playing Background')
+      )
     )
-    .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
     .addTextDisplayComponents(
       new TextDisplayBuilder().setContent(
-        `⏱️ \`${formatTime(info.length)}\`  •  ` +
-        `${loopEmoji} Loop: \`${player.loop ?? 'none'}\`  •  ` +
-        `🔊 Vol: \`${player.volume ?? 100}%\`\n` +
-        `🎛️ Filters: ${filterStr}\n` +
-        `🙋 Requested by <@${info.requester}>`
+        `### [${info.title ?? 'Unknown Title'}](${info.uri ?? 'https://youtube.com'})\n` +
+        `${src.emoji} ${info.author ?? 'Unknown'} • ${src.name}`
+      )
+    )
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
+        `\`${formatTime(elapsed)}\` ${buildProgressBar(elapsed, total)} \`${formatTime(total)}\``
       )
     )
     .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
-    // Row 1: Previous, Pause/Resume, Skip, VoteSkip, Stop
+    // Main strip — exactly like the wallpaper order
     .addActionRowComponents(
       new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId('previous')
-          .setEmoji('⏮️')
-          .setStyle(ButtonStyle.Secondary)
-          .setDisabled(disabled),
-        new ButtonBuilder()
-          .setCustomId(isPaused ? 'resume' : 'pause')
-          .setEmoji(isPaused ? '▶️' : '⏸️')
-          .setStyle(isPaused ? ButtonStyle.Success : ButtonStyle.Primary)
-          .setDisabled(disabled),
-        new ButtonBuilder().setCustomId('skip').setEmoji('⏭️').setStyle(ButtonStyle.Primary).setDisabled(disabled),
-        new ButtonBuilder()
-          .setCustomId('voteskip')
-          .setLabel(votes > 0 ? `Vote (${votes})` : 'Vote Skip')
-          .setEmoji('🗳️').setStyle(ButtonStyle.Secondary).setDisabled(disabled),
-        new ButtonBuilder().setCustomId('stop').setEmoji('⏹️').setStyle(ButtonStyle.Danger).setDisabled(disabled)
-      )
-    )
-    // Row 2: Loop, Shuffle, Autoplay, Filters, Queue, Lyrics
-    .addActionRowComponents(
-      new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId('loop').setEmoji('🔁')
-          .setStyle(player.loop && player.loop !== 'none' ? ButtonStyle.Success : ButtonStyle.Secondary)
-          .setDisabled(disabled),
         new ButtonBuilder().setCustomId('shuffle').setEmoji('🔀').setStyle(ButtonStyle.Secondary).setDisabled(disabled),
-        new ButtonBuilder()
-          .setCustomId('autoplay').setLabel('Autoplay')
-          .setEmoji(autoplayEnabled.has(player.guildId) ? '✅' : '❌')
-          .setStyle(autoplayEnabled.has(player.guildId) ? ButtonStyle.Success : ButtonStyle.Secondary)
-          .setDisabled(disabled),
-        new ButtonBuilder().setCustomId('filters').setEmoji('🎛️').setLabel('Filters').setStyle(ButtonStyle.Secondary).setDisabled(disabled),
-        new ButtonBuilder().setCustomId('queue').setEmoji('📋').setLabel('Queue').setStyle(ButtonStyle.Secondary).setDisabled(disabled)
+        new ButtonBuilder().setCustomId('previous').setEmoji('⏮️').setStyle(ButtonStyle.Secondary).setDisabled(disabled),
+        new ButtonBuilder().setCustomId(isPaused ? 'resume' : 'pause').setEmoji(isPaused ? '▶️' : '⏸️').setStyle(ButtonStyle.Primary).setDisabled(disabled),
+        new ButtonBuilder().setCustomId('skip').setEmoji('⏭️').setStyle(ButtonStyle.Secondary).setDisabled(disabled),
+        new ButtonBuilder().setCustomId('loop').setEmoji(loopEmoji).setStyle(player.loop && player.loop !== 'none' ? ButtonStyle.Success : ButtonStyle.Secondary).setDisabled(disabled)
       )
     )
-    // Row 3: Lyrics
+    // Secondary row — everything else, kept out of the way
+    .addActionRowComponents(
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('voteskip').setEmoji('🗳️').setStyle(ButtonStyle.Secondary).setDisabled(disabled),
+        new ButtonBuilder().setCustomId('stop').setEmoji('⏹️').setStyle(ButtonStyle.Danger).setDisabled(disabled),
+        new ButtonBuilder().setCustomId('autoplay').setEmoji(autoplayEnabled.has(player.guildId) ? '✅' : '❌').setLabel('Auto').setStyle(autoplayEnabled.has(player.guildId) ? ButtonStyle.Success : ButtonStyle.Secondary).setDisabled(disabled),
+        new ButtonBuilder().setCustomId('filters').setEmoji('🎛️').setStyle(ButtonStyle.Secondary).setDisabled(disabled),
+        new ButtonBuilder().setCustomId('queue').setEmoji('📋').setStyle(ButtonStyle.Secondary).setDisabled(disabled)
+      )
+    )
     .addActionRowComponents(
       new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('lyrics').setEmoji('📝').setLabel('Lyrics').setStyle(ButtonStyle.Secondary).setDisabled(disabled)
-      )
-    );
-}
-
-function createSimpleContainer(title, description, emoji = 'ℹ️') {
-  return new ContainerBuilder()
-    .addSectionComponents(
-      new SectionBuilder()
-        .addTextDisplayComponents(
-          new TextDisplayBuilder().setContent(`## ${emoji} ${title}\n${description}`)
-        )
-        .setThumbnailAccessory(
-          new ThumbnailBuilder()
-            .setURL(client.user.displayAvatarURL({ size: 1024 }))
-            .setDescription(title)
-        )
-    )
-    .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
-}
-
-function createQueueContainer(player) {
-  const queue   = player.queue ?? [];
-  const current = player.current;
-  let desc = '';
-  if (current?.info) {
-    const src = detectSource(current.info);
-    desc += `**🎵 Now Playing:**\n**[${current.info.title}](${current.info.uri})**\n${current.info.author ?? 'Unknown'} • ${formatTime(current.info.length)} • ${src.emoji} ${src.name} • <@${current.info.requester}>\n\n`;
-  }
-  if (queue.length > 0) {
-    desc += `**📋 Up Next:**\n`;
-    queue.slice(0, 10).forEach((t, i) => {
-      const inf = t.info ?? {};
-      const src = detectSource(inf);
-      desc += `\`${i + 1}.\` **[${inf.title}](${inf.uri})**\n${inf.author ?? 'Unknown'} • ${formatTime(inf.length)} • ${src.emoji} • <@${inf.requester}>\n`;
-    });
-    if (queue.length > 10) desc += `\n*...and ${queue.length - 10} more track(s)*`;
-  } else if (!current) {
-    desc = 'Queue is empty. Use `/play` to add songs!';
-  }
-  const fSet = activeFilters.get(player.guildId) ?? new Set();
-  desc += `\n\n🔁 Loop: \`${(!player.loop || player.loop === 'none') ? 'off' : player.loop}\`` +
-    ` │ 🤖 Autoplay: \`${autoplayEnabled.has(player.guildId) ? 'on' : 'off'}\`` +
-    ` │ 🔊 Vol: \`${player.volume ?? 100}%\`` +
-    ` │ 🎵 Total: \`${queue.length + (current ? 1 : 0)}\`` +
-    (fSet.size > 0 ? ` │ 🎛️ \`${[...fSet].join(', ')}\`` : '');
-  return new ContainerBuilder()
-    .addSectionComponents(
-      new SectionBuilder()
-        .addTextDisplayComponents(new TextDisplayBuilder().setContent(`## 📋 Queue\n${desc}`))
-        .setThumbnailAccessory(new ThumbnailBuilder().setURL(client.user.displayAvatarURL({ size: 1024 })).setDescription('Queue'))
-    )
-    .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
-}
-
-function createFiltersContainer(guildId) {
-  const fSet = activeFilters.get(guildId) ?? new Set();
-  const activeStr = fSet.size > 0 ? [...fSet].map(f => `\`${f}\``).join(' ') : '`none`';
-  const list =
-    `🎸 \`bassboost\`    — Heavy bass enhancement\n` +
-    `🌙 \`nightcore\`    — Sped up + higher pitch\n` +
-    `🌊 \`vaporwave\`    — Slowed + lower pitch\n` +
-    `🎧 \`8d\`           — Spatial 8D audio\n` +
-    `😴 \`slowedreverb\` — Slowed with reverb\n` +
-    `🔆 \`treble\`       — Treble boost\n` +
-    `🎤 \`pop\`          — Pop equalizer\n` +
-    `🌀 \`soft\`         — Low-pass smooth\n` +
-    `📢 \`loud\`         — All bands boosted\n` +
-    `🦻 \`earrape\`      — Max boost (very loud!)\n` +
-    `🎤 \`karaoke\`      — Vocal remover\n` +
-    `📻 \`distortion\`   — Distortion effect\n` +
-    `🐉 \`china\`        — China effect\n` +
-    `🐿️ \`chipmunk\`     — Chipmunk pitch\n` +
-    `🎵 \`vibrato\`      — Vibrato effect\n` +
-    `〰️ \`tremolo\`      — Tremolo effect\n\n` +
-    `**Active:** ${activeStr}\n\n` +
-    `Use \`/filter <name>\` to toggle • \`/clearfilters\` to reset`;
-  return new ContainerBuilder()
-    .addSectionComponents(
-      new SectionBuilder()
-        .addTextDisplayComponents(new TextDisplayBuilder().setContent(`## 🎛️ Audio Filters\n${list}`))
-        .setThumbnailAccessory(new ThumbnailBuilder().setURL(client.user.displayAvatarURL({ size: 1024 })).setDescription('Filters'))
-    )
-    .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
-}
-
-function createHistoryContainer(guildId) {
-  const hist = songHistory.get(guildId) ?? [];
-  const desc = hist.length === 0
-    ? 'No songs played yet this session.'
-    : hist.slice(0, 15).map((t, i) => {
-        const inf = t.info ?? {};
-        const src = detectSource(inf);
-        return `\`${i + 1}.\` **[${inf.title}](${inf.uri})**\n${inf.author ?? 'Unknown'} • ${formatTime(inf.length)} • ${src.emoji} <@${inf.requester}>`;
-      }).join('\n');
-  return new ContainerBuilder()
-    .addSectionComponents(
-      new SectionBuilder()
-        .addTextDisplayComponents(new TextDisplayBuilder().setContent(`## 🕒 Song History\n${desc}`))
-        .setThumbnailAccessory(new ThumbnailBuilder().setURL(client.user.displayAvatarURL({ size: 1024 })).setDescription('History'))
-    )
-    .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
-}
-
-function createStatsContainer() {
-  const mem = (process.memoryUsage().heapUsed / 1024 / 1024).toFixed(2);
-  return new ContainerBuilder()
-    .addSectionComponents(
-      new SectionBuilder()
-        .addTextDisplayComponents(
-          new TextDisplayBuilder().setContent(
-            `## 📊 Bot Statistics\n` +
-            `🏠 **Servers:** \`${client.guilds.cache.size}\`\n` +
-            `👥 **Users:** \`${client.guilds.cache.reduce((a, g) => a + g.memberCount, 0)}\`\n` +
-            `🎵 **Active Players:** \`${riffy.players?.size ?? 0}\`\n` +
-            `⏱️ **Uptime:** \`${formatTime(client.uptime)}\`\n` +
-            `📶 **Ping:** \`${client.ws.ping}ms\`\n` +
-            `🧠 **Memory:** \`${mem} MB\`\n` +
-            `🔊 **Audio Quality:** \`Hi-Fi Opus (Max)\`\n` +
-            `🔗 **Lavalink:** ${isLavalinkConnected ? '🟢 Connected' : '🔴 Disconnected'}`
-          )
-        )
-        .setThumbnailAccessory(new ThumbnailBuilder().setURL(client.user.displayAvatarURL({ size: 1024 })).setDescription('Stats'))
-    )
-    .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
-}
-
-function createHelpContainer() {
-  return new ContainerBuilder()
-    .addSectionComponents(
-      new SectionBuilder()
-        .addTextDisplayComponents(
-          new TextDisplayBuilder().setContent(
-            `## 🎵 ${client.user.username} — Help\n` +
-            `Hi-Fi music from **YouTube • Spotify • SoundCloud • Apple Music**\n` +
-            `Lavalink: ${isLavalinkConnected ? '🟢 Online' : '🔴 Offline'} | Made by **SKY x LIVE**\n\n` +
-            `**🎵 Playback**\n` +
-            `\`/play\` \`/pause\` \`/resume\` \`/skip\` \`/stop\`\n` +
-            `\`/nowplaying\` \`/voteskip\` \`/247\` \`/autoplay\`\n\n` +
-            `**📋 Queue**\n` +
-            `\`/queue\` \`/shuffle\` \`/loop\` \`/clearqueue\`\n` +
-            `\`/remove\` \`/move\` \`/volume\` \`/history\`\n\n` +
-            `**🎛️ Audio Filters (15+)**\n` +
-            `\`/filter\` — \`bassboost\` \`nightcore\` \`vaporwave\`\n` +
-            `\`8d\` \`slowedreverb\` \`karaoke\` \`chipmunk\` \`vibrato\` \`tremolo\` …\n` +
-            `\`/clearfilters\` — Remove all effects\n\n` +
-            `**🛡️ DJ / Admin**\n` +
-            `\`/djrole\` \`/lyrics\`\n\n` +
-            `**ℹ️ Utility**\n` +
-            `\`/stats\` \`/ping\` \`/invite\` \`/support\` \`/help\`\n\n` +
-            `💡 Paste any Spotify/Apple Music/SoundCloud link directly!`
-          )
-        )
-        .setThumbnailAccessory(new ThumbnailBuilder().setURL(client.user.displayAvatarURL({ size: 1024 })).setDescription('Help'))
-    )
-    .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
-    .addActionRowComponents(
-      new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setLabel('Invite Me').setStyle(ButtonStyle.Link)
-          .setURL(`https://discord.com/api/oauth2/authorize?client_id=${client.user.id}&permissions=3165184&scope=bot%20applications.commands`),
-        new ButtonBuilder().setLabel('Support').setStyle(ButtonStyle.Link).setURL(config.supportServer)
       )
     );
 }
@@ -621,37 +442,24 @@ async function handlePlay(guildId, voiceChannelId, textChannelId, query, request
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-//  LYRICS (lyrics.ovh)
+//  LYRICS
 // ══════════════════════════════════════════════════════════════════════════════
 
 async function handleLyrics(guildId, query, replyFn) {
-  let artist = '', title = '';
-
-  if (!query) {
+  if (!geniusClient) return replyFn({ content: '❌ Lyrics unavailable. Install: `npm install genius-lyrics`', ephemeral: true });
+  let searchQuery = query;
+  if (!searchQuery) {
     const player = riffy.players.get(guildId);
     if (!player?.current) return replyFn({ content: '❌ Nothing is playing.', ephemeral: true });
     const inf = player.current.info;
-    title  = (inf.title  ?? '').replace(/\[.*?\]|\(.*?\)/g, '').trim();
-    artist = (inf.author ?? '').replace(/\[.*?\]|\(.*?\)/g, '').trim();
-  } else if (query.includes('-')) {
-    const [a, ...rest] = query.split('-');
-    artist = a.trim();
-    title  = rest.join('-').trim();
-  } else {
-    title = query.trim();
+    searchQuery = `${inf.title} ${inf.author}`.replace(/\[.*?\]|\(.*?\)/g, '').trim();
   }
-
-  if (!title) return replyFn({ content: '❌ Song name nahi mila.', ephemeral: true });
-
   try {
-    const lyrics = await fetchLyricsOvh(artist, title);
-    if (!lyrics) {
-      return replyFn({
-        content: `❌ Lyrics nahi mile **${artist ? artist + ' - ' : ''}${title}** ke liye`,
-        ephemeral: true
-      });
-    }
-
+    const results = await geniusClient.songs.search(searchQuery);
+    if (!results?.length) return replyFn({ content: `❌ No lyrics found for **${searchQuery}**`, ephemeral: true });
+    const song   = results[0];
+    const lyrics = await song.lyrics();
+    if (!lyrics) return replyFn({ content: `❌ Lyrics unavailable for **${song.title}**`, ephemeral: true });
     const chunks = [];
     let cur = '';
     for (const line of lyrics.split('\n')) {
@@ -659,14 +467,13 @@ async function handleLyrics(guildId, query, replyFn) {
       else cur += (cur ? '\n' : '') + line;
     }
     if (cur) chunks.push(cur);
-
     await replyFn({
       components: [
         new ContainerBuilder()
           .addSectionComponents(
             new SectionBuilder()
-              .addTextDisplayComponents(new TextDisplayBuilder().setContent(`## 📝 ${title}\n**By:** ${artist || 'Unknown'}\n\n${chunks[0]}`))
-              .setThumbnailAccessory(new ThumbnailBuilder().setURL(client.user.displayAvatarURL({ size: 1024 })).setDescription('Lyrics'))
+              .addTextDisplayComponents(new TextDisplayBuilder().setContent(`## 📝 ${song.title}\n**By:** ${song.artist?.name ?? 'Unknown'}\n\n${chunks[0]}`))
+              .setThumbnailAccessory(new ThumbnailBuilder().setURL(song.image ?? client.user.displayAvatarURL({ size: 1024 })).setDescription('Album Art'))
           )
           .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
       ],
