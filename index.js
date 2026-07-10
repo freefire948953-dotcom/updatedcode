@@ -677,20 +677,20 @@ async function handlePlay(guildId, voiceChannelId, textChannelId, query, request
 // ══════════════════════════════════════════════════════════════════════════════
 
 async function handleLyrics(guildId, query, replyFn) {
-  if (!geniusClient) return replyFn({ content: '❌ Lyrics unavailable. Install: `npm install genius-lyrics`', ephemeral: true });
+  if (!geniusClient) return replyFn({ content: '❌ Lyrics unavailable. Install: `npm install genius-lyrics`', flags: MessageFlags.Ephemeral });
   let searchQuery = query;
   if (!searchQuery) {
     const player = riffy.players.get(guildId);
-    if (!player?.current) return replyFn({ content: '❌ Nothing is playing.', ephemeral: true });
+    if (!player?.current) return replyFn({ content: '❌ Nothing is playing.', flags: MessageFlags.Ephemeral });
     const inf = player.current.info;
     searchQuery = `${inf.title} ${inf.author}`.replace(/\[.*?\]|\(.*?\)/g, '').trim();
   }
   try {
     const results = await geniusClient.songs.search(searchQuery);
-    if (!results?.length) return replyFn({ content: `❌ No lyrics found for **${searchQuery}**`, ephemeral: true });
+    if (!results?.length) return replyFn({ content: `❌ No lyrics found for **${searchQuery}**`, flags: MessageFlags.Ephemeral });
     const song   = results[0];
     const lyrics = await song.lyrics();
-    if (!lyrics) return replyFn({ content: `❌ Lyrics unavailable for **${song.title}**`, ephemeral: true });
+    if (!lyrics) return replyFn({ content: `❌ Lyrics unavailable for **${song.title}**`, flags: MessageFlags.Ephemeral });
     const chunks = [];
     let cur = '';
     for (const line of lyrics.split('\n')) {
@@ -708,11 +708,11 @@ async function handleLyrics(guildId, query, replyFn) {
           )
           .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
       ],
-      flags: MessageFlags.IsComponentsV2, ephemeral: true
+      flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral
     });
   } catch (e) {
     console.error('[Lyrics]', e.message);
-    replyFn({ content: `❌ Lyrics error: ${e.message}`, ephemeral: true });
+    replyFn({ content: `❌ Lyrics error: ${e.message}`, flags: MessageFlags.Ephemeral });
   }
 }
 
@@ -827,7 +827,7 @@ riffy.on('queueEnd', async (player) => {
 //  CLIENT EVENTS
 // ══════════════════════════════════════════════════════════════════════════════
 
-client.on('ready', async () => {
+client.on('clientReady', async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
   // Restore voice sessions saved before a restart, so the nodeConnect handler below rejoins them
   const persisted = loadSessions();
@@ -1009,23 +1009,23 @@ client.on('interactionCreate', async (interaction) => {
   // ── BUTTONS ────────────────────────────────────────────────────────────────
   if (interaction.isButton()) {
     const player = riffy.players.get(interaction.guildId);
-    if (!player) return interaction.reply({ content: '❌ No active player', ephemeral: true }).catch(() => {});
+    if (!player) return interaction.reply({ content: '❌ No active player', flags: MessageFlags.Ephemeral }).catch(() => {});
     const member = interaction.member;
-    if (!member.voice?.channel) return interaction.reply({ content: '❌ Join a voice channel first', ephemeral: true }).catch(() => {});
-    if (member.voice.channel.id !== player.voiceChannel) return interaction.reply({ content: '❌ Join the bot\'s voice channel', ephemeral: true }).catch(() => {});
+    if (!member.voice?.channel) return interaction.reply({ content: '❌ Join a voice channel first', flags: MessageFlags.Ephemeral }).catch(() => {});
+    if (member.voice.channel.id !== player.voiceChannel) return interaction.reply({ content: '❌ Join the bot\'s voice channel', flags: MessageFlags.Ephemeral }).catch(() => {});
     const djProtected = ['skip', 'stop', 'shuffle', 'loop', 'previous'];
     if (djProtected.includes(interaction.customId) && !hasDJPermission(member, interaction.guildId))
-      return interaction.reply({ content: '❌ DJ role required', ephemeral: true }).catch(() => {});
+      return interaction.reply({ content: '❌ DJ role required', flags: MessageFlags.Ephemeral }).catch(() => {});
 
     try {
       switch (interaction.customId) {
 
         case 'previous': {
-          if (!player.current) return interaction.reply({ content: '❌ Nothing playing', ephemeral: true });
+          if (!player.current) return interaction.reply({ content: '❌ Nothing playing', flags: MessageFlags.Ephemeral });
           await handlePrevious(
             player,
             interaction.user.id,
-            async (msg) => interaction.reply({ content: msg, ephemeral: true }),
+            async (msg) => interaction.reply({ content: msg, flags: MessageFlags.Ephemeral }),
             async () => {
               if (player.current) await interaction.message.edit({ components: [createNowPlayingContainer(player, player.current, true)], flags: MessageFlags.IsComponentsV2 }).catch(() => {});
             }
@@ -1038,28 +1038,28 @@ client.on('interactionCreate', async (interaction) => {
           await player.pause(pause);
           const nm = nowPlayingMsgs.get(player.guildId);
           if (nm && player.current) await nm.edit({ components: [createNowPlayingContainer(player, player.current)], flags: MessageFlags.IsComponentsV2 }).catch(() => {});
-          await interaction.reply({ content: pause ? '⏸️ Paused' : '▶️ Resumed', ephemeral: true });
+          await interaction.reply({ content: pause ? '⏸️ Paused' : '▶️ Resumed', flags: MessageFlags.Ephemeral });
           break;
         }
 
         case 'skip': {
           if (player.current) await interaction.message.edit({ components: [createNowPlayingContainer(player, player.current, true)], flags: MessageFlags.IsComponentsV2 }).catch(() => {});
           player.stop();
-          await interaction.reply({ content: '⏭️ Skipped', ephemeral: true });
+          await interaction.reply({ content: '⏭️ Skipped', flags: MessageFlags.Ephemeral });
           break;
         }
 
         case 'voteskip': {
-          if (!player.current) return interaction.reply({ content: '❌ Nothing playing', ephemeral: true });
+          if (!player.current) return interaction.reply({ content: '❌ Nothing playing', flags: MessageFlags.Ephemeral });
           const res = processVoteSkip(player, member.user.id);
           if (res.skip) {
             if (player.current) await interaction.message.edit({ components: [createNowPlayingContainer(player, player.current, true)], flags: MessageFlags.IsComponentsV2 }).catch(() => {});
             player.stop();
-            await interaction.reply({ content: '🗳️ Vote passed! Skipping...', ephemeral: false });
+            await interaction.reply({ content: '🗳️ Vote passed! Skipping...' });
           } else {
             const nm = nowPlayingMsgs.get(player.guildId);
             if (nm && player.current) await nm.edit({ components: [createNowPlayingContainer(player, player.current)], flags: MessageFlags.IsComponentsV2 }).catch(() => {});
-            await interaction.reply({ content: `🗳️ **${res.current}/${res.required}** votes to skip`, ephemeral: true });
+            await interaction.reply({ content: `🗳️ **${res.current}/${res.required}** votes to skip`, flags: MessageFlags.Ephemeral });
           }
           break;
         }
@@ -1069,14 +1069,14 @@ client.on('interactionCreate', async (interaction) => {
           nowPlayingMsgs.delete(player.guildId);
           activeFilters.delete(player.guildId);
           intentionalDestroy(player.guildId, player);
-          await interaction.reply({ content: '⏹️ Stopped and cleared queue', ephemeral: true });
+          await interaction.reply({ content: '⏹️ Stopped and cleared queue', flags: MessageFlags.Ephemeral });
           break;
         }
 
         case 'shuffle': {
-          if (!player.queue?.length) return interaction.reply({ content: '❌ Queue is empty', ephemeral: true });
+          if (!player.queue?.length) return interaction.reply({ content: '❌ Queue is empty', flags: MessageFlags.Ephemeral });
           player.queue.shuffle();
-          await interaction.reply({ content: '🔀 Queue shuffled!', ephemeral: true });
+          await interaction.reply({ content: '🔀 Queue shuffled!', flags: MessageFlags.Ephemeral });
           break;
         }
 
@@ -1086,7 +1086,7 @@ client.on('interactionCreate', async (interaction) => {
           player.setLoop(next);
           const nm = nowPlayingMsgs.get(player.guildId);
           if (nm && player.current) await nm.edit({ components: [createNowPlayingContainer(player, player.current)], flags: MessageFlags.IsComponentsV2 }).catch(() => {});
-          await interaction.reply({ content: `🔁 Loop: **${next}**`, ephemeral: true });
+          await interaction.reply({ content: `🔁 Loop: **${next}**`, flags: MessageFlags.Ephemeral });
           break;
         }
 
@@ -1098,22 +1098,22 @@ client.on('interactionCreate', async (interaction) => {
           else autoplayOwner.delete(player.guildId);
           const nm = nowPlayingMsgs.get(player.guildId);
           if (nm && player.current) await nm.edit({ components: [createNowPlayingContainer(player, player.current)], flags: MessageFlags.IsComponentsV2 }).catch(() => {});
-          await interaction.reply({ content: on ? '✅ Autoplay ON' : '❌ Autoplay OFF', ephemeral: true });
+          await interaction.reply({ content: on ? '✅ Autoplay ON' : '❌ Autoplay OFF', flags: MessageFlags.Ephemeral });
           break;
         }
 
         case 'filters': {
-          await interaction.reply({ components: [createFiltersContainer(interaction.guildId)], flags: MessageFlags.IsComponentsV2, ephemeral: true });
+          await interaction.reply({ components: [createFiltersContainer(interaction.guildId)], flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral });
           break;
         }
 
         case 'queue': {
-          await interaction.reply({ components: [createQueueContainer(player)], flags: MessageFlags.IsComponentsV2, ephemeral: true });
+          await interaction.reply({ components: [createQueueContainer(player)], flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral });
           break;
         }
 
         case 'lyrics': {
-          await interaction.deferReply({ ephemeral: true });
+          await interaction.deferReply({ flags: MessageFlags.Ephemeral });
           await handleLyrics(interaction.guildId, null, d => interaction.editReply(d));
           break;
         }
@@ -1121,7 +1121,7 @@ client.on('interactionCreate', async (interaction) => {
     } catch (e) {
       console.error('[Button]', e.message);
       if (!interaction.replied && !interaction.deferred)
-        await interaction.reply({ content: '❌ Something went wrong', ephemeral: true }).catch(() => {});
+        await interaction.reply({ content: '❌ Something went wrong', flags: MessageFlags.Ephemeral }).catch(() => {});
     }
     return;
   }
@@ -1132,32 +1132,32 @@ client.on('interactionCreate', async (interaction) => {
 
   const getPlayer = (requireVC = true) => {
     const p = riffy.players.get(guild.id);
-    if (!p) { interaction.reply({ content: '❌ No active player', ephemeral: true }); return null; }
+    if (!p) { interaction.reply({ content: '❌ No active player', flags: MessageFlags.Ephemeral }); return null; }
     if (requireVC) {
-      if (!member.voice?.channel) { interaction.reply({ content: '❌ Join a voice channel first', ephemeral: true }); return null; }
-      if (member.voice.channel.id !== p.voiceChannel) { interaction.reply({ content: '❌ Join the bot\'s voice channel', ephemeral: true }); return null; }
+      if (!member.voice?.channel) { interaction.reply({ content: '❌ Join a voice channel first', flags: MessageFlags.Ephemeral }); return null; }
+      if (member.voice.channel.id !== p.voiceChannel) { interaction.reply({ content: '❌ Join the bot\'s voice channel', flags: MessageFlags.Ephemeral }); return null; }
     }
     return p;
   };
 
   const djCmds = ['skip', 'previous', 'stop', 'shuffle', 'loop', 'volume', 'remove', 'move', 'clearqueue', 'filter', 'clearfilters'];
   if (djCmds.includes(commandName) && !hasDJPermission(member, guild.id))
-    return interaction.reply({ content: `❌ DJ role required for \`/${commandName}\``, ephemeral: true });
+    return interaction.reply({ content: `❌ DJ role required for \`/${commandName}\``, flags: MessageFlags.Ephemeral });
 
   try {
 
     if (commandName === 'play') {
-      if (!member.voice?.channel) return interaction.reply({ content: '❌ Join a voice channel first', ephemeral: true });
+      if (!member.voice?.channel) return interaction.reply({ content: '❌ Join a voice channel first', flags: MessageFlags.Ephemeral });
       await interaction.deferReply();
       await handlePlay(guild.id, member.voice.channel.id, channel.id, options.getString('query'), member.user.id,
-        msg => interaction.reply(typeof msg === 'string' ? { content: msg, ephemeral: true } : msg),
+        msg => interaction.reply(typeof msg === 'string' ? { content: msg, flags: MessageFlags.Ephemeral } : msg),
         data => interaction.editReply(data)
       );
     }
 
     else if (commandName === 'previous') {
       const p = getPlayer(); if (!p) return;
-      if (!p.current) return interaction.reply({ content: '❌ Nothing playing', ephemeral: true });
+      if (!p.current) return interaction.reply({ content: '❌ Nothing playing', flags: MessageFlags.Ephemeral });
       await handlePrevious(
         p,
         member.user.id,
@@ -1185,7 +1185,7 @@ client.on('interactionCreate', async (interaction) => {
 
     else if (commandName === 'voteskip') {
       const p = getPlayer(); if (!p) return;
-      if (!p.current) return interaction.reply({ content: '❌ Nothing playing', ephemeral: true });
+      if (!p.current) return interaction.reply({ content: '❌ Nothing playing', flags: MessageFlags.Ephemeral });
       const res = processVoteSkip(p, member.user.id);
       if (res.skip) { p.stop(); await interaction.reply({ components: [createSimpleContainer('Vote Passed!', 'Skipping now...', '🗳️')], flags: MessageFlags.IsComponentsV2 }); }
       else await interaction.reply({ components: [createSimpleContainer('Vote Recorded', `**${res.current}/${res.required}** votes needed`, '🗳️')], flags: MessageFlags.IsComponentsV2 });
@@ -1207,20 +1207,20 @@ client.on('interactionCreate', async (interaction) => {
 
     else if (commandName === 'queue') {
       const p = riffy.players.get(guild.id);
-      if (!p) return interaction.reply({ content: '❌ No active player', ephemeral: true });
-      if (!p.queue.length && !p.current) return interaction.reply({ content: '❌ Queue is empty', ephemeral: true });
+      if (!p) return interaction.reply({ content: '❌ No active player', flags: MessageFlags.Ephemeral });
+      if (!p.queue.length && !p.current) return interaction.reply({ content: '❌ Queue is empty', flags: MessageFlags.Ephemeral });
       await interaction.reply({ components: [createQueueContainer(p)], flags: MessageFlags.IsComponentsV2 });
     }
 
     else if (commandName === 'nowplaying') {
       const p = riffy.players.get(guild.id);
-      if (!p?.current) return interaction.reply({ content: '❌ Nothing playing', ephemeral: true });
+      if (!p?.current) return interaction.reply({ content: '❌ Nothing playing', flags: MessageFlags.Ephemeral });
       await interaction.reply({ components: [createNowPlayingContainer(p, p.current)], flags: MessageFlags.IsComponentsV2 });
     }
 
     else if (commandName === 'shuffle') {
       const p = getPlayer(); if (!p) return;
-      if (!p.queue.length) return interaction.reply({ content: '❌ Queue is empty', ephemeral: true });
+      if (!p.queue.length) return interaction.reply({ content: '❌ Queue is empty', flags: MessageFlags.Ephemeral });
       p.queue.shuffle();
       await interaction.reply({ components: [createSimpleContainer('Shuffled', 'Queue order randomised!', '🔀')], flags: MessageFlags.IsComponentsV2 });
     }
@@ -1235,7 +1235,7 @@ client.on('interactionCreate', async (interaction) => {
     else if (commandName === 'remove') {
       const p = getPlayer(); if (!p) return;
       const pos = options.getInteger('position') - 1;
-      if (pos < 0 || pos >= p.queue.length) return interaction.reply({ content: '❌ Invalid position', ephemeral: true });
+      if (pos < 0 || pos >= p.queue.length) return interaction.reply({ content: '❌ Invalid position', flags: MessageFlags.Ephemeral });
       const removed = p.queue.remove(pos);
       await interaction.reply({ components: [createSimpleContainer('Removed', `Removed **${removed.info.title}**`, '✅')], flags: MessageFlags.IsComponentsV2 });
     }
@@ -1244,7 +1244,7 @@ client.on('interactionCreate', async (interaction) => {
       const p = getPlayer(); if (!p) return;
       const from = options.getInteger('from') - 1;
       const to   = options.getInteger('to')   - 1;
-      if (from < 0 || from >= p.queue.length || to < 0 || to >= p.queue.length) return interaction.reply({ content: '❌ Invalid positions', ephemeral: true });
+      if (from < 0 || from >= p.queue.length || to < 0 || to >= p.queue.length) return interaction.reply({ content: '❌ Invalid positions', flags: MessageFlags.Ephemeral });
       const arr = Array.from(p.queue);
       const [t] = arr.splice(from, 1);
       arr.splice(to, 0, t);
@@ -1260,7 +1260,7 @@ client.on('interactionCreate', async (interaction) => {
     }
 
     else if (commandName === '247') {
-      if (!member.voice?.channel) return interaction.reply({ content: '❌ Join a voice channel first', ephemeral: true });
+      if (!member.voice?.channel) return interaction.reply({ content: '❌ Join a voice channel first', flags: MessageFlags.Ephemeral });
       if (queue247.has(guild.id)) {
         queue247.delete(guild.id);
         await interaction.reply({ components: [createSimpleContainer('24/7 Disabled', 'Bot will leave when queue ends', '✅')], flags: MessageFlags.IsComponentsV2 });
@@ -1273,7 +1273,7 @@ client.on('interactionCreate', async (interaction) => {
 
     else if (commandName === 'autoplay') {
       const p = riffy.players.get(guild.id);
-      if (!p) return interaction.reply({ content: '❌ No active player', ephemeral: true });
+      if (!p) return interaction.reply({ content: '❌ No active player', flags: MessageFlags.Ephemeral });
       autoplayEnabled.has(guild.id) ? autoplayEnabled.delete(guild.id) : autoplayEnabled.add(guild.id);
       const on = autoplayEnabled.has(guild.id);
       autoplayAutoDisabled.delete(guild.id); // manual toggle overrides any pending auto-restore
@@ -1285,7 +1285,7 @@ client.on('interactionCreate', async (interaction) => {
     else if (commandName === 'filter') {
       const p = getPlayer(); if (!p) return;
       const name = options.getString('name');
-      if (!FILTERS[name]) return interaction.reply({ content: `❌ Unknown filter: \`${name}\``, ephemeral: true });
+      if (!FILTERS[name]) return interaction.reply({ content: `❌ Unknown filter: \`${name}\``, flags: MessageFlags.Ephemeral });
       if (!activeFilters.has(guild.id)) activeFilters.set(guild.id, new Set());
       const fSet = activeFilters.get(guild.id);
       if (fSet.has(name)) {
@@ -1296,7 +1296,7 @@ client.on('interactionCreate', async (interaction) => {
       } else {
         fSet.add(name);
         const ok = await applyFilter(p, name);
-        if (!ok) { fSet.delete(name); return interaction.reply({ content: '❌ Failed to apply filter.', ephemeral: true }); }
+        if (!ok) { fSet.delete(name); return interaction.reply({ content: '❌ Failed to apply filter.', flags: MessageFlags.Ephemeral }); }
         await interaction.reply({ components: [createSimpleContainer('Filter Applied', `\`${name}\` enabled! 🎵\nActive: ${[...fSet].map(f => `\`${f}\``).join(' ')}`, '🎛️')], flags: MessageFlags.IsComponentsV2 });
       }
       if (p.current) { const nm = nowPlayingMsgs.get(guild.id); if (nm) await nm.edit({ components: [createNowPlayingContainer(p, p.current)], flags: MessageFlags.IsComponentsV2 }).catch(() => {}); }
@@ -1310,16 +1310,16 @@ client.on('interactionCreate', async (interaction) => {
     }
 
     else if (commandName === 'lyrics') {
-      await interaction.deferReply({ ephemeral: true });
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       await handleLyrics(guild.id, options.getString('query') ?? null, d => interaction.editReply(d));
     }
 
     else if (commandName === 'history') {
-      await interaction.reply({ components: [createHistoryContainer(guild.id)], flags: MessageFlags.IsComponentsV2, ephemeral: true });
+      await interaction.reply({ components: [createHistoryContainer(guild.id)], flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral });
     }
 
     else if (commandName === 'djrole') {
-      if (!member.permissions.has('Administrator')) return interaction.reply({ content: '❌ Admin only', ephemeral: true });
+      if (!member.permissions.has('Administrator')) return interaction.reply({ content: '❌ Admin only', flags: MessageFlags.Ephemeral });
       const role = options.getRole('role');
       if (role) { djRoles.set(guild.id, role.id); await interaction.reply({ components: [createSimpleContainer('DJ Role Set', `<@&${role.id}> can now control music`, '🛡️')], flags: MessageFlags.IsComponentsV2 }); }
       else { djRoles.delete(guild.id); await interaction.reply({ components: [createSimpleContainer('DJ Role Removed', 'Everyone can control music now', '🛡️')], flags: MessageFlags.IsComponentsV2 }); }
@@ -1341,7 +1341,7 @@ client.on('interactionCreate', async (interaction) => {
 
   } catch (e) {
     console.error(`[Slash /${commandName}]`, e.message ?? e);
-    const errPayload = { content: '❌ An error occurred. Please try again.', ephemeral: true };
+    const errPayload = { content: '❌ An error occurred. Please try again.', flags: MessageFlags.Ephemeral };
     if (interaction.deferred)      await interaction.editReply(errPayload).catch(() => {});
     else if (!interaction.replied) await interaction.reply(errPayload).catch(() => {});
   }
