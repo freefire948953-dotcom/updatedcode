@@ -13,7 +13,8 @@ const {
   Client, GatewayIntentBits, ActivityType,
   ActionRowBuilder, ButtonBuilder, ButtonStyle,
   ContainerBuilder, SectionBuilder, TextDisplayBuilder,
-  ThumbnailBuilder, SeparatorBuilder, SeparatorSpacingSize, MessageFlags
+  ThumbnailBuilder, SeparatorBuilder, SeparatorSpacingSize, MessageFlags,
+  MediaGalleryBuilder, MediaGalleryItemBuilder
 } = require('discord.js');
 const { Riffy } = require('riffy');
 const config  = require('./config.js');
@@ -31,11 +32,24 @@ const fetch = (...a) => import('node-fetch').then(({ default: f }) => f(...a));
 spotifyModule.init({ spotifyClient: SpotifyClient(fetch) });
 
 // ─── Lyrics ───────────────────────────────────────────────────────────────────
-let geniusClient = null;
-try {
-  const Genius = require('genius-lyrics');
-  geniusClient = new Genius.Client();
-} catch (_) { console.warn('⚠️  genius-lyrics not installed'); }
+// ─── Lyrics (lyrics.ovh) ──────────────────────────────────────────────────────
+async function fetchLyricsOvh(artist, title) {
+  const url = `https://api.lyrics.ovh/v1/${encodeURIComponent(artist)}/${encodeURIComponent(title)}`;
+  const res = await fetch(url);
+  const contentType = res.headers.get('content-type') || '';
+  const rawText = await res.text();
+
+  if (!contentType.includes('application/json')) {
+    console.error('[LyricsOvh] Non-JSON response:', rawText.slice(0, 200));
+    return null;
+  }
+
+  let data;
+  try { data = JSON.parse(rawText); }
+  catch (e) { console.error('[LyricsOvh] Parse failed:', e.message); return null; }
+
+  return data?.lyrics || null;
+}
 
 // ─── Discord Client ───────────────────────────────────────────────────────────
 const client = new Client({
@@ -275,25 +289,48 @@ function makeSpotifyAdapter(guildId, voiceChannelId, textChannelId, requesterId)
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+//  BACKGROUND IMAGE + PROGRESS BAR HELPER
+// ══════════════════════════════════════════════════════════════════════════════
+
+const NOWPLAYING_BG = "https://github.com/freefire948953-dotcom/updatedcode/blob/main/Music%20background%20template%20_%F0%9F%94%A5.jpg?raw=true";
+
+function buildProgressBar(current, total, length = 18) {
+  const ratio = total > 0 ? Math.min(current / total, 1) : 0;
+  const pos = Math.round(ratio * length);
+  let bar = '';
+  for (let i = 0; i < length; i++) {
+    bar += i === pos ? '🔘' : '▬';
+  }
+  return bar;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 //  UI BUILDERS — Components V2
 // ══════════════════════════════════════════════════════════════════════════════
 
 function createNowPlayingContainer(player, track, disabled = false) {
   const info      = track.info ?? {};
-  const thumb     = resolveThumbnail(info);
   const isPaused  = player.paused;
   const loopEmoji = player.loop === 'track' ? '🔂' : player.loop === 'queue' ? '🔁' : '▶️';
+  const src       = detectSource(info);
+  const elapsed   = player.position ?? 0;
+  const total     = info.length ?? 0;
+  const thumb     = resolveThumbnail(info);
   const votes     = voteSkips.get(player.guildId)?.size ?? 0;
   const fSet      = activeFilters.get(player.guildId) ?? new Set();
   const filterStr = fSet.size > 0 ? [...fSet].map(f => `\`${f}\``).join(' ') : '`none`';
-  const src       = detectSource(info);
+  const isLooping   = player.loop && player.loop !== 'none';
+  const isAutoplay  = autoplayEnabled.has(player.guildId);
+  const isVoted     = votes > 0;
 
   return new ContainerBuilder()
+    // ── Dark "glass" accent — near-black so the card reads as transparent black
+    .setAccentColor(0x0a0a0f)
     .addSectionComponents(
       new SectionBuilder()
         .addTextDisplayComponents(
           new TextDisplayBuilder().setContent(
-            `## 🎵 Now Playing\n` +
+            `## 🐧🎶 Now Playing\n` +
             `### [${info.title ?? 'Unknown Title'}](${info.uri ?? 'https://youtube.com'})\n` +
             `👤 ${info.author ?? 'Unknown'}  •  ${src.emoji} **${src.name}**`
           )
@@ -305,22 +342,22 @@ function createNowPlayingContainer(player, track, disabled = false) {
     .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
     .addTextDisplayComponents(
       new TextDisplayBuilder().setContent(
-        `⏱️ \`${formatTime(info.length)}\`  •  ` +
+        `\`${formatTime(elapsed)}\` ${buildProgressBar(elapsed, total)} \`${formatTime(total)}\``
+      )
+    )
+    .addTextDisplayComponents(
+      new TextDisplayBuilder().setContent(
         `${loopEmoji} Loop: \`${player.loop ?? 'none'}\`  •  ` +
-        `🔊 Vol: \`${player.volume ?? 100}%\`\n` +
+        `🔊 Vol: \`${player.volume ?? 100}%\`  •  ` +
         `🎛️ Filters: ${filterStr}\n` +
         `🙋 Requested by <@${info.requester}>`
       )
     )
     .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
-    // Row 1: Previous, Pause/Resume, Skip, VoteSkip, Stop
+    // Row 1 — core transport, 5 across in one clean line
     .addActionRowComponents(
       new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId('previous')
-          .setEmoji('⏮️')
-          .setStyle(ButtonStyle.Secondary)
-          .setDisabled(disabled),
+        new ButtonBuilder().setCustomId('previous').setEmoji('⏮️').setStyle(ButtonStyle.Secondary).setDisabled(disabled),
         new ButtonBuilder()
           .setCustomId(isPaused ? 'resume' : 'pause')
           .setEmoji(isPaused ? '▶️' : '⏸️')
@@ -329,29 +366,31 @@ function createNowPlayingContainer(player, track, disabled = false) {
         new ButtonBuilder().setCustomId('skip').setEmoji('⏭️').setStyle(ButtonStyle.Primary).setDisabled(disabled),
         new ButtonBuilder()
           .setCustomId('voteskip')
-          .setLabel(votes > 0 ? `Vote (${votes})` : 'Vote Skip')
-          .setEmoji('🗳️').setStyle(ButtonStyle.Secondary).setDisabled(disabled),
-        new ButtonBuilder().setCustomId('stop').setEmoji('⏹️').setStyle(ButtonStyle.Danger).setDisabled(disabled)
+          .setLabel(isVoted ? `Vote (${votes})` : 'Vote Skip')
+          .setEmoji('🗳️')
+          .setStyle(isVoted ? ButtonStyle.Success : ButtonStyle.Secondary)
+          .setDisabled(disabled),
+        new ButtonBuilder().setCustomId('stop').setEmoji('⏹️').setLabel('Stop').setStyle(ButtonStyle.Danger).setDisabled(disabled)
       )
     )
-    // Row 2: Loop, Shuffle, Autoplay, Filters, Queue, Lyrics
+    // Row 2 — toggle/utility row, also 5 across, colors flip when active
     .addActionRowComponents(
       new ActionRowBuilder().addComponents(
         new ButtonBuilder()
-          .setCustomId('loop').setEmoji('🔁')
-          .setStyle(player.loop && player.loop !== 'none' ? ButtonStyle.Success : ButtonStyle.Secondary)
+          .setCustomId('loop').setEmoji(loopEmoji).setLabel('Loop')
+          .setStyle(isLooping ? ButtonStyle.Success : ButtonStyle.Secondary)
           .setDisabled(disabled),
-        new ButtonBuilder().setCustomId('shuffle').setEmoji('🔀').setStyle(ButtonStyle.Secondary).setDisabled(disabled),
+        new ButtonBuilder().setCustomId('shuffle').setEmoji('🔀').setLabel('Shuffle').setStyle(ButtonStyle.Secondary).setDisabled(disabled),
         new ButtonBuilder()
           .setCustomId('autoplay').setLabel('Autoplay')
-          .setEmoji(autoplayEnabled.has(player.guildId) ? '✅' : '❌')
-          .setStyle(autoplayEnabled.has(player.guildId) ? ButtonStyle.Success : ButtonStyle.Secondary)
+          .setEmoji(isAutoplay ? '✅' : '❌')
+          .setStyle(isAutoplay ? ButtonStyle.Success : ButtonStyle.Secondary)
           .setDisabled(disabled),
-        new ButtonBuilder().setCustomId('filters').setEmoji('🎛️').setLabel('Filters').setStyle(ButtonStyle.Secondary).setDisabled(disabled),
+        new ButtonBuilder().setCustomId('filters').setEmoji('🎛️').setLabel('Filters').setStyle(fSet.size > 0 ? ButtonStyle.Success : ButtonStyle.Secondary).setDisabled(disabled),
         new ButtonBuilder().setCustomId('queue').setEmoji('📋').setLabel('Queue').setStyle(ButtonStyle.Secondary).setDisabled(disabled)
       )
     )
-    // Row 3: Lyrics
+    // Row 3 — Lyrics
     .addActionRowComponents(
       new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('lyrics').setEmoji('📝').setLabel('Lyrics').setStyle(ButtonStyle.Secondary).setDisabled(disabled)
@@ -688,6 +727,12 @@ riffy.on('trackStart', async (player, track) => {
   pushHistory(player.guildId, track);
   voteSkips.delete(player.guildId);
   autoReconnect.set(player.guildId, { voiceChannelId: player.voiceChannel, textChannelId: player.textChannel });
+  // Boost default volume once per session for fuller audio clarity (only if user hasn't set a custom volume yet)
+  if (!autoReconnect.get(player.guildId)?._volumeBoosted && (!player.volume || player.volume === 100)) {
+    try { player.setVolume(130); } catch (_) {}
+    const rc = autoReconnect.get(player.guildId);
+    if (rc) rc._volumeBoosted = true;
+  }
   const channel = client.channels.cache.get(player.textChannel);
   if (!channel) return;
   const old = nowPlayingMsgs.get(player.guildId);
