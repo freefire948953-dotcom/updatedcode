@@ -24,6 +24,8 @@ require('dotenv').config();
 // ─── Global error safety ──────────────────────────────────────────────────────
 process.on('unhandledRejection', (r) => console.error('[UnhandledRejection]', r));
 process.on('uncaughtException',  (e) => console.error('[UncaughtException]',  e));
+process.on('SIGTERM', () => { try { saveSessions(); } catch (_) {} process.exit(0); });
+process.on('SIGINT',  () => { try { saveSessions(); } catch (_) {} process.exit(0); });
 
 // ─── Spotify ──────────────────────────────────────────────────────────────────
 const spotifyModule = require('./spotify');
@@ -107,6 +109,46 @@ const songHistory     = new Map();
 const voteSkips       = new Map();
 const activeFilters   = new Map();
 const autoReconnect   = new Map();
+
+// Restart-persistent voice sessions (survives process restarts, not fresh redeploys)
+const fs = require('fs');
+const SESSION_FILE = './voice-sessions.json';
+function saveSessions() {
+  try {
+    const data = {};
+    for (const [guildId, info] of autoReconnect.entries()) data[guildId] = { voiceChannelId: info.voiceChannelId, textChannelId: info.textChannelId };
+    fs.writeFileSync(SESSION_FILE, JSON.stringify(data));
+  } catch (e) { console.error('[SaveSessions]', e.message); }
+}
+function loadSessions() {
+  try {
+    if (!fs.existsSync(SESSION_FILE)) return {};
+    return JSON.parse(fs.readFileSync(SESSION_FILE, 'utf8'));
+  } catch (e) { console.error('[LoadSessions]', e.message); return {}; }
+}
+
+// Marks a guild's voice disconnect as intentional (/leave, /stop) so the kick-reconnect logic skips it
+const intentionalDisconnects = new Set();
+
+// Deafen-based auto-pause tracking — guildId set when WE paused it (so we know to auto-resume, not fight a manual pause)
+const deafenAutoPaused = new Set();
+
+// Tracks which user turned autoplay on, and whether it was auto-disabled because that user left VC
+const autoplayOwner       = new Map(); // guildId -> userId
+const autoplayAutoDisabled = new Set(); // guildId set = autoplay was turned off because owner left, waiting for them to rejoin
+
+// Call this instead of player.destroy() directly for user-initiated stop/leave so the
+// kick-detection watcher below knows this disconnect was intentional and doesn't try to rejoin.
+function intentionalDestroy(guildId, player) {
+  intentionalDisconnects.add(guildId);
+  autoReconnect.delete(guildId);
+  autoplayOwner.delete(guildId);
+  autoplayAutoDisabled.delete(guildId);
+  deafenAutoPaused.delete(guildId);
+  saveSessions();
+  try { player.destroy(); } catch (_) {}
+  setTimeout(() => intentionalDisconnects.delete(guildId), 5000);
+}
 
 // ─── Audio Filters ────────────────────────────────────────────────────────────
 const FILTERS = {
@@ -330,7 +372,7 @@ function createNowPlayingContainer(player, track, disabled = false) {
       new SectionBuilder()
         .addTextDisplayComponents(
           new TextDisplayBuilder().setContent(
-            `## 🐧🎶 Now Playing\n` +
+            `## 🎶 Now Playing\n` +
             `### [${info.title ?? 'Unknown Title'}](${info.uri ?? 'https://youtube.com'})\n` +
             `👤 ${info.author ?? 'Unknown'}  •  ${src.emoji} **${src.name}**`
           )
@@ -340,11 +382,6 @@ function createNowPlayingContainer(player, track, disabled = false) {
         )
     )
     .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
-    .addTextDisplayComponents(
-      new TextDisplayBuilder().setContent(
-        `\`${formatTime(elapsed)}\` ${buildProgressBar(elapsed, total)} \`${formatTime(total)}\``
-      )
-    )
     .addTextDisplayComponents(
       new TextDisplayBuilder().setContent(
         `${loopEmoji} Loop: \`${player.loop ?? 'none'}\`  •  ` +
@@ -699,24 +736,30 @@ function processVoteSkip(player, userId) {
 //  RIFFY EVENTS
 // ══════════════════════════════════════════════════════════════════════════════
 
+// Shared reconnect helper — used by node-reconnect, kicked-from-VC recovery, and boot-time restore
+async function attemptReconnect(guildId, data, reasonLabel = 'Auto-Reconnected! 🔄', reasonMsg = null) {
+  try {
+    const guild = client.guilds.cache.get(guildId);
+    if (!guild) return false;
+    const vc = guild.channels.cache.get(data.voiceChannelId);
+    if (!vc) return false;
+    if (riffy.players.get(guildId)) return false;
+    riffy.createConnection({ guildId, voiceChannel: data.voiceChannelId, textChannel: data.textChannelId, deaf: true });
+    const textCh = guild.channels.cache.get(data.textChannelId);
+    if (textCh) await textCh.send({ components: [createSimpleContainer(reasonLabel, reasonMsg ?? `Back online! Rejoined <#${data.voiceChannelId}> automatically.`, '✅')], flags: MessageFlags.IsComponentsV2 }).catch(() => {});
+    console.log(`✅ Auto-rejoined VC in guild ${guildId}`);
+    return true;
+  } catch (e) { console.error(`[AutoReconnect] Guild ${guildId}:`, e.message); return false; }
+}
+
 riffy.on('nodeConnect', async (node) => {
   console.log(`✅ Node "${node.name}" connected`);
   isLavalinkConnected = true;
   if (autoReconnect.size === 0) return;
   console.log(`🔄 Auto-reconnecting ${autoReconnect.size} voice channel(s)...`);
   for (const [guildId, data] of autoReconnect.entries()) {
-    try {
-      await new Promise(r => setTimeout(r, 1000));
-      const guild = client.guilds.cache.get(guildId);
-      if (!guild) continue;
-      const vc = guild.channels.cache.get(data.voiceChannelId);
-      if (!vc) continue;
-      if (riffy.players.get(guildId)) continue;
-      riffy.createConnection({ guildId, voiceChannel: data.voiceChannelId, textChannel: data.textChannelId, deaf: true });
-      const textCh = guild.channels.cache.get(data.textChannelId);
-      if (textCh) await textCh.send({ components: [createSimpleContainer('Auto-Reconnected! 🔄', `Back online! Rejoined <#${data.voiceChannelId}> automatically.`, '✅')], flags: MessageFlags.IsComponentsV2 }).catch(() => {});
-      console.log(`✅ Auto-rejoined VC in guild ${guildId}`);
-    } catch (e) { console.error(`[AutoReconnect] Guild ${guildId}:`, e.message); }
+    await new Promise(r => setTimeout(r, 1000));
+    await attemptReconnect(guildId, data);
   }
 });
 
@@ -727,6 +770,7 @@ riffy.on('trackStart', async (player, track) => {
   pushHistory(player.guildId, track);
   voteSkips.delete(player.guildId);
   autoReconnect.set(player.guildId, { voiceChannelId: player.voiceChannel, textChannelId: player.textChannel });
+  saveSessions();
   // Boost default volume once per session for fuller audio clarity (only if user hasn't set a custom volume yet)
   if (!autoReconnect.get(player.guildId)?._volumeBoosted && (!player.volume || player.volume === 100)) {
     try { player.setVolume(130); } catch (_) {}
@@ -775,17 +819,20 @@ riffy.on('queueEnd', async (player) => {
   }
 
   if (channel) await channel.send({ components: [createSimpleContainer('Queue Ended', 'All songs played! Use `/play` to add more.', '✅')], flags: MessageFlags.IsComponentsV2 });
-  try { player.destroy(); } catch (_) {}
   activeFilters.delete(player.guildId);
-  autoReconnect.delete(player.guildId);
+  intentionalDestroy(player.guildId, player);
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  CLIENT EVENTS
 // ══════════════════════════════════════════════════════════════════════════════
 
-client.on('clientReady', async () => {
+client.on('ready', async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
+  // Restore voice sessions saved before a restart, so the nodeConnect handler below rejoins them
+  const persisted = loadSessions();
+  for (const [guildId, data] of Object.entries(persisted)) autoReconnect.set(guildId, data);
+  if (Object.keys(persisted).length) console.log(`💾 Restored ${Object.keys(persisted).length} saved voice session(s) from disk`);
   try { riffy.init(client.user.id); } catch (e) { console.error('[Riffy Init]', e); }
   const types = { PLAYING: ActivityType.Playing, LISTENING: ActivityType.Listening, WATCHING: ActivityType.Watching, STREAMING: ActivityType.Streaming, COMPETING: ActivityType.Competing };
   client.user.setActivity(config.activity.name, { type: types[config.activity.type] ?? ActivityType.Listening });
@@ -864,9 +911,93 @@ client.on('guildDelete', async (guild) => {
   queue247.delete(guild.id); autoplayEnabled.delete(guild.id); djRoles.delete(guild.id);
   nowPlayingMsgs.delete(guild.id); songHistory.delete(guild.id); voteSkips.delete(guild.id);
   activeFilters.delete(guild.id); autoReconnect.delete(guild.id);
+  autoplayOwner.delete(guild.id); autoplayAutoDisabled.delete(guild.id);
+  deafenAutoPaused.delete(guild.id); intentionalDisconnects.delete(guild.id);
+  saveSessions();
   const p = riffy.players.get(guild.id);
   if (p) { try { p.destroy(); } catch (_) {} }
   await sendGuildLog(guild, false);
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  VOICE STATE UPDATE — kick-reconnect, deafen auto-pause, autoplay owner tracking
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Re-checks everyone in a player's VC and pauses/resumes based on deafen status.
+// Rule: pause ONLY if every human in the channel is self-deafened. Mute is ignored.
+async function reevaluateDeafenPause(guildId) {
+  const player = riffy.players.get(guildId);
+  if (!player || !player.current) return;
+  const guild = client.guilds.cache.get(guildId);
+  if (!guild) return;
+  const vc = guild.channels.cache.get(player.voiceChannel);
+  if (!vc) return;
+
+  const humans = vc.members.filter(m => !m.user.bot);
+  if (humans.size === 0) return; // nobody to listen — leave as-is (24/7 / queue logic handles empty VC elsewhere)
+
+  const allDeafened = humans.every(m => m.voice?.selfDeaf);
+
+  if (allDeafened && !player.paused) {
+    try { await player.pause(true); } catch (_) {}
+    deafenAutoPaused.add(guildId);
+    const nm = nowPlayingMsgs.get(guildId);
+    if (nm) await nm.edit({ components: [createNowPlayingContainer(player, player.current)], flags: MessageFlags.IsComponentsV2 }).catch(() => {});
+  } else if (!allDeafened && deafenAutoPaused.has(guildId)) {
+    deafenAutoPaused.delete(guildId);
+    try { await player.pause(false); } catch (_) {}
+    const nm = nowPlayingMsgs.get(guildId);
+    if (nm) await nm.edit({ components: [createNowPlayingContainer(player, player.current)], flags: MessageFlags.IsComponentsV2 }).catch(() => {});
+  }
+}
+
+client.on('voiceStateUpdate', async (oldState, newState) => {
+  const guildId = oldState.guild?.id ?? newState.guild?.id;
+  if (!guildId) return;
+  const player = riffy.players.get(guildId);
+
+  // ── 1) Bot got kicked / force-disconnected from VC (not via /leave or /stop) ──
+  if (oldState.member?.id === client.user.id && oldState.channelId && !newState.channelId) {
+    if (intentionalDisconnects.has(guildId)) return; // we did this on purpose, ignore
+    const saved = autoReconnect.get(guildId);
+    if (saved) {
+      console.warn(`⚠️ Bot was disconnected from VC in guild ${guildId} — attempting to rejoin`);
+      setTimeout(() => attemptReconnect(guildId, saved, 'Reconnected! 🔄', 'Got disconnected from the voice channel — rejoined automatically.'), 2000);
+    }
+    return;
+  }
+
+  if (!player || !player.current) return;
+
+  // Only react to changes involving the bot's own voice channel
+  const involvesPlayerVC = oldState.channelId === player.voiceChannel || newState.channelId === player.voiceChannel;
+  if (!involvesPlayerVC) return;
+
+  // ── 2) Deafen-based auto-pause/resume ──
+  await reevaluateDeafenPause(guildId);
+
+  // ── 3) Autoplay tied to the user who enabled it ──
+  const owner = autoplayOwner.get(guildId);
+  if (owner && oldState.member?.id === owner) {
+    // Owner left the bot's VC → turn autoplay off, remember to restore it later
+    if (oldState.channelId === player.voiceChannel && newState.channelId !== player.voiceChannel) {
+      if (autoplayEnabled.has(guildId)) {
+        autoplayEnabled.delete(guildId);
+        autoplayAutoDisabled.add(guildId);
+        const nm = nowPlayingMsgs.get(guildId);
+        if (nm) await nm.edit({ components: [createNowPlayingContainer(player, player.current)], flags: MessageFlags.IsComponentsV2 }).catch(() => {});
+      }
+    }
+  }
+  if (owner && newState.member?.id === owner && newState.channelId === player.voiceChannel) {
+    // Owner rejoined the bot's VC → restore autoplay if it was auto-disabled (not manually turned off)
+    if (autoplayAutoDisabled.has(guildId)) {
+      autoplayAutoDisabled.delete(guildId);
+      autoplayEnabled.add(guildId);
+      const nm = nowPlayingMsgs.get(guildId);
+      if (nm) await nm.edit({ components: [createNowPlayingContainer(player, player.current)], flags: MessageFlags.IsComponentsV2 }).catch(() => {});
+    }
+  }
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -937,7 +1068,7 @@ client.on('interactionCreate', async (interaction) => {
           if (player.current) await interaction.message.edit({ components: [createNowPlayingContainer(player, player.current, true)], flags: MessageFlags.IsComponentsV2 }).catch(() => {});
           nowPlayingMsgs.delete(player.guildId);
           activeFilters.delete(player.guildId);
-          try { player.destroy(); } catch (_) {}
+          intentionalDestroy(player.guildId, player);
           await interaction.reply({ content: '⏹️ Stopped and cleared queue', ephemeral: true });
           break;
         }
@@ -962,6 +1093,9 @@ client.on('interactionCreate', async (interaction) => {
         case 'autoplay': {
           autoplayEnabled.has(player.guildId) ? autoplayEnabled.delete(player.guildId) : autoplayEnabled.add(player.guildId);
           const on = autoplayEnabled.has(player.guildId);
+          autoplayAutoDisabled.delete(player.guildId); // manual toggle overrides any pending auto-restore
+          if (on) autoplayOwner.set(player.guildId, interaction.user.id);
+          else autoplayOwner.delete(player.guildId);
           const nm = nowPlayingMsgs.get(player.guildId);
           if (nm && player.current) await nm.edit({ components: [createNowPlayingContainer(player, player.current)], flags: MessageFlags.IsComponentsV2 }).catch(() => {});
           await interaction.reply({ content: on ? '✅ Autoplay ON' : '❌ Autoplay OFF', ephemeral: true });
@@ -1060,7 +1194,7 @@ client.on('interactionCreate', async (interaction) => {
     else if (commandName === 'stop') {
       const p = getPlayer(); if (!p) return;
       nowPlayingMsgs.delete(guild.id); activeFilters.delete(guild.id);
-      try { p.destroy(); } catch (_) {}
+      intentionalDestroy(guild.id, p);
       await interaction.reply({ components: [createSimpleContainer('Stopped', 'Player stopped and queue cleared', '⏹️')], flags: MessageFlags.IsComponentsV2 });
     }
 
@@ -1142,6 +1276,9 @@ client.on('interactionCreate', async (interaction) => {
       if (!p) return interaction.reply({ content: '❌ No active player', ephemeral: true });
       autoplayEnabled.has(guild.id) ? autoplayEnabled.delete(guild.id) : autoplayEnabled.add(guild.id);
       const on = autoplayEnabled.has(guild.id);
+      autoplayAutoDisabled.delete(guild.id); // manual toggle overrides any pending auto-restore
+      if (on) autoplayOwner.set(guild.id, interaction.user.id);
+      else autoplayOwner.delete(guild.id);
       await interaction.reply({ components: [createSimpleContainer(on ? 'Autoplay ON' : 'Autoplay OFF', on ? 'Similar songs will auto-play' : 'Autoplay disabled', on ? '✅' : '❌')], flags: MessageFlags.IsComponentsV2 });
     }
 
@@ -1237,7 +1374,7 @@ client.on('messageCreate', async (message) => {
       const p = riffy.players.get(message.guild.id);
       if (!p) return reply('Error', 'Not in a voice channel.', '❌');
       nowPlayingMsgs.delete(message.guild.id); queue247.delete(message.guild.id); activeFilters.delete(message.guild.id);
-      try { p.destroy(); } catch (_) {}
+      intentionalDestroy(message.guild.id, p);
       return reply('Left', 'Disconnected 👋');
     }
 
@@ -1279,7 +1416,7 @@ client.on('messageCreate', async (message) => {
       if (!p) return reply('Error', 'Nothing playing.', '❌');
       if (!hasDJPermission(message.member, message.guild.id)) return reply('Error', 'DJ role required!', '❌');
       nowPlayingMsgs.delete(message.guild.id); activeFilters.delete(message.guild.id);
-      try { p.destroy(); } catch (_) {}
+      intentionalDestroy(message.guild.id, p);
       return reply('Stopped', 'Stopped ⏹️');
     }
 
