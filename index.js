@@ -784,7 +784,7 @@ riffy.on('queueEnd', async (player) => {
 //  CLIENT EVENTS
 // ══════════════════════════════════════════════════════════════════════════════
 
-client.on('ready', async () => {
+client.on('clientReady', async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
   try { riffy.init(client.user.id); } catch (e) { console.error('[Riffy Init]', e); }
   const types = { PLAYING: ActivityType.Playing, LISTENING: ActivityType.Listening, WATCHING: ActivityType.Watching, STREAMING: ActivityType.Streaming, COMPETING: ActivityType.Competing };
