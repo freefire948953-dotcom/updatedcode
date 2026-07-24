@@ -33,7 +33,20 @@ const SpotifyClient = require('spotify-url-info');
 const fetch = (...a) => import('node-fetch').then(({ default: f }) => f(...a));
 spotifyModule.init({ spotifyClient: SpotifyClient(fetch) });
 
-// ─── Lyrics ───────────────────────────────────────────────────────────────────
+// ─── Lyrics (Genius) ──────────────────────────────────────────────────────────
+let geniusClient = null;
+try {
+  const { Client: GeniusClient } = require('genius-lyrics');
+  if (config.geniusApiKey) {
+    geniusClient = new GeniusClient(config.geniusApiKey);
+    console.log('✅ Genius lyrics client ready');
+  } else {
+    console.warn('[Genius] No "geniusApiKey" found in config.js — /lyrics will reply with an error until you add one.');
+  }
+} catch (e) {
+  console.warn('[Genius] "genius-lyrics" package not installed — /lyrics will be disabled. Run: npm install genius-lyrics');
+}
+
 // ─── Lyrics (lyrics.ovh) ──────────────────────────────────────────────────────
 async function fetchLyricsOvh(artist, title) {
   const url = `https://api.lyrics.ovh/v1/${encodeURIComponent(artist)}/${encodeURIComponent(title)}`;
@@ -280,26 +293,42 @@ function waitForPlayerReady(guildId, timeoutMs = 6000) {
 }
 
 // ─── Multi-platform resolver ──────────────────────────────────────────────────
+// PERFORMANCE FIX: the old version retried the exact same failing URL up to 4
+// times in a row (Apple-Music check → generic URL check → 3x inside the
+// fallback loop, since `isUrl ? query : ...` just re-sent the same URL again).
+// That alone could make a bad/slow link take 4x as long to fail. It also tried
+// ytmsearch → ytsearch → scsearch one at a time (each a full network
+// round-trip), so if the first one was slow, everything behind it waited too.
+//
+// Fixed version: a URL is only ever resolved ONCE. Plain search queries are
+// fired at all 3 platforms IN PARALLEL and we take whichever succeeds first
+// in priority order — this alone should noticeably cut down /play response
+// time, especially on searches (not direct links).
 async function resolveWithFallback(query, requesterId) {
   const isUrl = /^https?:\/\//i.test(query);
-  if (isUrl && query.includes('music.apple.com')) {
-    try {
-      const r = await riffy.resolve({ query, requester: requesterId });
-      if (r?.tracks?.length) { console.log('✅ Found on Apple Music'); return r; }
-    } catch (e) { console.error('[AppleMusic]', e.message); }
-  }
+  const t0 = Date.now();
+
   if (isUrl) {
     try {
       const r = await riffy.resolve({ query, requester: requesterId });
+      console.log(`[Resolve Timing] URL resolve took ${Date.now() - t0}ms`);
       if (r?.tracks?.length) return r;
     } catch (e) { console.error('[URL Resolve]', e.message); }
+    return null; // a failed URL won't magically work by re-trying it as a "search"
   }
-  for (const platform of ['ytmsearch', 'ytsearch', 'scsearch']) {
-    try {
-      const q = isUrl ? query : `${platform}:${query}`;
-      const r = await riffy.resolve({ query: q, requester: requesterId });
-      if (r?.tracks?.length) { console.log(`✅ Found on ${platform}`); return r; }
-    } catch (e) { console.error(`[${platform}]`, e.message); }
+
+  const platforms = ['ytmsearch', 'ytsearch', 'scsearch'];
+  const settled = await Promise.allSettled(
+    platforms.map(platform => riffy.resolve({ query: `${platform}:${query}`, requester: requesterId }))
+  );
+  console.log(`[Resolve Timing] Parallel search across ${platforms.length} platforms took ${Date.now() - t0}ms`);
+  for (let i = 0; i < platforms.length; i++) {
+    const res = settled[i];
+    if (res.status === 'rejected') console.log(`[Resolve Timing] ${platforms[i]} rejected:`, res.reason?.message ?? res.reason);
+    if (res.status === 'fulfilled' && res.value?.tracks?.length) {
+      console.log(`✅ Found on ${platforms[i]}`);
+      return res.value;
+    }
   }
   return null;
 }
@@ -886,6 +915,25 @@ async function sendGuildLog(guild, joined) {
     if (!logsChannel) return;
     const owner = await guild.fetchOwner().catch(() => null);
     const createdAt = `<t:${Math.floor(guild.createdTimestamp / 1000)}:R>`;
+
+    // NEW: try to generate an invite link when the bot JOINS a server, so the
+    // log channel has a way for you to actually visit/join that server.
+    // Needs "Create Instant Invite" permission in at least one text channel.
+    let inviteLine = '';
+    if (joined) {
+      let inviteUrl = null;
+      try {
+        const invitableChannel = guild.channels.cache.find(
+          (ch) => ch.type === 0 /* GuildText */ && ch.permissionsFor(guild.members.me)?.has('CreateInstantInvite')
+        );
+        if (invitableChannel) {
+          const invite = await invitableChannel.createInvite({ maxAge: 0, maxUses: 0, reason: 'Auto-generated for join logs' });
+          inviteUrl = `https://discord.gg/${invite.code}`;
+        }
+      } catch (e) { console.error('[GuildLog:Invite]', e.message); }
+      inviteLine = `\n**Invite:** ${inviteUrl ? inviteUrl : 'Could not create (missing "Create Invite" permission)'}`;
+    }
+
     const container = new ContainerBuilder()
       .addSectionComponents(
         new SectionBuilder()
@@ -895,7 +943,8 @@ async function sendGuildLog(guild, joined) {
               `**Server:** ${guild.name}\n**Server ID:** \`${guild.id}\`\n` +
               `**Members:** ${guild.memberCount}\n` +
               `**Owner:** ${owner ? `${owner.user.tag} (\`${owner.id}\`)` : 'Unknown'}\n` +
-              `**Created:** ${createdAt}\n**Total Servers:** ${client.guilds.cache.size}`
+              `**Created:** ${createdAt}\n**Total Servers:** ${client.guilds.cache.size}` +
+              inviteLine
             )
           )
           .setThumbnailAccessory(new ThumbnailBuilder().setURL(guild.iconURL({ size: 1024 }) ?? client.user.displayAvatarURL({ size: 1024 })).setDescription(guild.name))
@@ -903,6 +952,38 @@ async function sendGuildLog(guild, joined) {
       .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
     await logsChannel.send({ components: [container], flags: MessageFlags.IsComponentsV2 });
   } catch (e) { console.error('[GuildLog]', e.message); }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  COMMAND USAGE LOGGING — every slash command, button click, and mention
+//  command gets logged here: who used it, what it was, where, in which server.
+//  Falls back to config.logsChannelId if you don't set a separate one.
+// ══════════════════════════════════════════════════════════════════════════════
+async function logCommandUsage({ source, commandName, user, guild, channel, details = '' }) {
+  try {
+    const logsChannelId = config.commandLogsChannelId || config.logsChannelId;
+    if (!logsChannelId) return;
+    const logsChannel = client.channels.cache.get(logsChannelId);
+    if (!logsChannel) return;
+
+    const container = new ContainerBuilder()
+      .addSectionComponents(
+        new SectionBuilder()
+          .addTextDisplayComponents(
+            new TextDisplayBuilder().setContent(
+              `## 📋 Command Used — ${source}\n` +
+              `**Command:** \`${commandName}\`` + (details ? `\n**Details:** ${details}` : '') + `\n` +
+              `**User:** ${user.tag} (\`${user.id}\`)\n` +
+              `**Server:** ${guild ? `${guild.name} (\`${guild.id}\`)` : 'Direct Message'}\n` +
+              `**Channel:** ${channel ? `#${channel.name ?? channel.id}` : 'Unknown'}`
+            )
+          )
+          .setThumbnailAccessory(new ThumbnailBuilder().setURL(user.displayAvatarURL({ size: 256 })).setDescription(user.tag))
+      )
+      .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
+
+    await logsChannel.send({ components: [container], flags: MessageFlags.IsComponentsV2 });
+  } catch (e) { console.error('[CommandLog]', e.message); }
 }
 
 client.on('guildCreate', async (guild) => { console.log(`✅ Joined server: ${guild.name} (${guild.id})`); await sendGuildLog(guild, true); });
@@ -1008,6 +1089,10 @@ client.on('interactionCreate', async (interaction) => {
 
   // ── BUTTONS ────────────────────────────────────────────────────────────────
   if (interaction.isButton()) {
+    logCommandUsage({
+      source: 'Button', commandName: interaction.customId, user: interaction.user,
+      guild: interaction.guild, channel: interaction.channel
+    });
     const player = riffy.players.get(interaction.guildId);
     if (!player) return interaction.reply({ content: '❌ No active player', flags: MessageFlags.Ephemeral }).catch(() => {});
     const member = interaction.member;
@@ -1129,6 +1214,17 @@ client.on('interactionCreate', async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
   const { commandName, options, member, guild, channel } = interaction;
+
+  // Log this command usage — include the query/option text for commands where it matters
+  const cmdDetails = commandName === 'play' ? options.getString('query')
+    : commandName === 'filter' ? options.getString('name')
+    : commandName === 'volume' ? `${options.getInteger('level')}%`
+    : commandName === 'loop' ? options.getString('mode')
+    : '';
+  logCommandUsage({
+    source: 'Slash', commandName: `/${commandName}`, user: interaction.user,
+    guild, channel, details: cmdDetails
+  });
 
   const getPlayer = (requireVC = true) => {
     const p = riffy.players.get(guild.id);
@@ -1360,6 +1456,12 @@ client.on('messageCreate', async (message) => {
   const rest    = args.slice(1).join(' ').trim();
   const reply = (title, desc, emoji = '✅') =>
     message.reply({ components: [createSimpleContainer(title, desc, emoji)], flags: MessageFlags.IsComponentsV2 }).catch(() => {});
+
+  logCommandUsage({
+    source: 'Mention', commandName: `@${client.user.username} ${command || '(play)'}`,
+    user: message.author, guild: message.guild, channel: message.channel,
+    details: rest || ''
+  });
 
   try {
     if (command === 'join') {
