@@ -33,14 +33,15 @@ module.exports = {
   // ko paid/more-RAM plan pe upgrade karna zaroori hai, warna wahi error
   // dobara aayega.
   lavalink: {
-     nodes: [
-    {
-      url: `lavalinkv4.serenetia.com:80`,
-      name: `NOTHING`,
-      auth: `https://dsc.gg/ajidevserver`,
-      secure: false
-    },
-
+    nodes: [
+      {
+        url: `lavalinkv4.serenetia.com:80`,
+        name: `NOTHING`,
+        auth: `https://dsc.gg/ajidevserver`,
+        secure: false
+      }
+    ]
+  },
   // ─── Spotify API Credentials ───────────────────────────────────
   spotify: {
     clientId:     process.env.SPOTIFY_CLIENT_ID     || '',
