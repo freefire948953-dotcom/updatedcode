@@ -35,10 +35,10 @@ module.exports = {
   lavalink: {
     nodes: [
       {
-        name: 'main node',
-        host: 'lavalink.triniumhost.com',
-        port: 4333,
-        password: 'free',
+        name: 'NOTHING',
+        host: 'lavalinkv4.serenetia.com:80',
+        port: 80,
+        password: 'https://dsc.gg/ajidevserver',
         secure: false,
         retryAmount: 10,
         retryDelay: 5000
