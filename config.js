@@ -35,10 +35,10 @@ module.exports = {
   lavalink: {
     nodes: [
       {
-        name: 'GuardianX-Lavalink',
-        host: '3.84.78.226',
-        port: 3003,
-        password: 'AeroX',
+        name: 'main node',
+        host: 'lavalink.triniumhost.com',
+        port: 4333,
+        password: 'free',
         secure: false,
         retryAmount: 10,
         retryDelay: 5000
