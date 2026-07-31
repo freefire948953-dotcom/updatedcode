@@ -33,30 +33,13 @@ module.exports = {
   // ko paid/more-RAM plan pe upgrade karna zaroori hai, warna wahi error
   // dobara aayega.
   lavalink: {
-    nodes: [
-      {
-        name: 'NOTHING',
-        host: 'lavalinkv4.serenetia.com:80',
-        port: 80,
-        password: 'https://dsc.gg/ajidevserver',
-        secure: false,
-        retryAmount: 10,
-        retryDelay: 5000
-      }
-
-      /*
-      {
-        name: 'Backup Node',
-        host: process.env.LAVALINK_HOST || 'skyxmusic-lavalink.onrender.com',
-        port: Number(process.env.LAVALINK_PORT) || 443,
-        password: process.env.LAVALINK_PASSWORD || 'skyxmusic123',
-        secure: true,
-        retryAmount: 10,
-        retryDelay: 5000
-      }
-      */
-    ]
-  },
+     nodes: [
+    {
+      url: `lavalinkv4.serenetia.com:80`,
+      name: `NOTHING`,
+      auth: `https://dsc.gg/ajidevserver`,
+      secure: false
+    }
 
   // ─── Spotify API Credentials ───────────────────────────────────
   spotify: {
