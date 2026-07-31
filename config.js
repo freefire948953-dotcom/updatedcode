@@ -39,7 +39,7 @@ module.exports = {
       name: `NOTHING`,
       auth: `https://dsc.gg/ajidevserver`,
       secure: false
-    }
+    },
 
   // ─── Spotify API Credentials ───────────────────────────────────
   spotify: {
