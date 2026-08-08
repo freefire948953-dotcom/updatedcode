@@ -35,11 +35,11 @@ module.exports = {
   lavalink: {
   nodes: [
     {
-      host: "103.75.189.21",
-      port: 6969,
-      password: "AeroX",  // ya jo bhi actual password hai
+      host: "lavalinkv4.serenetia.com",
+      port: 80,
+      password: "https://seretia.link/discord",  // ya jo bhi actual password hai
       secure: false,
-      name: "NOTHING"
+      name: "GuardianX-Lavalink"
     }
   ]
 },
