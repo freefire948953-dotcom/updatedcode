@@ -35,10 +35,10 @@ module.exports = {
   lavalink: {
   nodes: [
     {
-      host: "https://marion-pill-not-highlighted.trycloudflare.com/",
-      port: 443,
+      host: "103.75.189.21",
+      port: 6969,
       password: "AeroX",  // ya jo bhi actual password hai
-      secure: true,
+      secure: false,
       name: "NOTHING"
     }
   ]
