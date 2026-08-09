@@ -1,9 +1,11 @@
 // ╔══════════════════════════════════════════════════════════════════════╗
-// ║              SKY x MUSIC BOT — index.js  v3.1                      ║
+// ║              SKY x MUSIC BOT — index.js  v3.2                      ║
 // ║  Platforms : YouTube · Spotify · SoundCloud · Apple Music          ║
 // ║  Audio     : Hi-Fi Opus · 15+ Filters · 8D · Bass · Nightcore      ║
 // ║  Features  : Queue · Loop · Shuffle · 24/7 · Autoplay              ║
 // ║              DJ Role · Vote Skip · Lyrics · History · Previous      ║
+// ║              Empty-VC Auto-Pause/Resume · Auto-Leave · Seek         ║
+// ║              No-prefix "uptime" · Search cache (faster /play)       ║
 // ║  UI        : Components V2 — Clean & Modern                         ║
 // ╚══════════════════════════════════════════════════════════════════════╝
 
@@ -78,6 +80,7 @@ const client = new Client({
 });
 
 let isLavalinkConnected = false;
+const botStartedAt = Date.now(); // used for /ping-style uptime fallback if client.uptime is ever null early on
 
 const riffy = new Riffy(client, config.lavalink.nodes, {
   send: (payload) => {
@@ -143,8 +146,18 @@ function loadSessions() {
 // Marks a guild's voice disconnect as intentional (/leave, /stop) so the kick-reconnect logic skips it
 const intentionalDisconnects = new Set();
 
-// Deafen-based auto-pause tracking — guildId set when WE paused it (so we know to auto-resume, not fight a manual pause)
-const deafenAutoPaused = new Set();
+// Unified auto-pause tracking — set when WE paused the player (empty VC or everyone deafened),
+// so we know to auto-resume later instead of fighting a manual pause.
+const autoPausedGuilds = new Set();
+
+// Guilds we already boosted default volume for this session (fixed: previously stored on the
+// autoReconnect map entry, which gets overwritten every trackStart, so the flag never actually
+// persisted — it only "worked" by accident because of the volume===100 check alongside it).
+const volumeBoostedGuilds = new Set();
+
+// Timers for "auto-leave after being alone N minutes" (per guild). Skipped entirely when 24/7 is on.
+const emptyVCTimers = new Map();
+const EMPTY_VC_LEAVE_MS = 5 * 60 * 1000; // 5 minutes
 
 // Tracks which user turned autoplay on, and whether it was auto-disabled because that user left VC
 const autoplayOwner       = new Map(); // guildId -> userId
@@ -157,7 +170,9 @@ function intentionalDestroy(guildId, player) {
   autoReconnect.delete(guildId);
   autoplayOwner.delete(guildId);
   autoplayAutoDisabled.delete(guildId);
-  deafenAutoPaused.delete(guildId);
+  autoPausedGuilds.delete(guildId);
+  volumeBoostedGuilds.delete(guildId);
+  if (emptyVCTimers.has(guildId)) { clearTimeout(emptyVCTimers.get(guildId)); emptyVCTimers.delete(guildId); }
   saveSessions();
   try { player.destroy(); } catch (_) {}
   setTimeout(() => intentionalDisconnects.delete(guildId), 5000);
@@ -292,6 +307,28 @@ function waitForPlayerReady(guildId, timeoutMs = 6000) {
   });
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+//  SEARCH CACHE — speeds up repeated /play requests (common song requests hit
+//  cache instead of a fresh network round-trip to YouTube/SoundCloud).
+// ══════════════════════════════════════════════════════════════════════════════
+const searchCache = new Map(); // key: lowercased query -> { result, ts }
+const SEARCH_CACHE_TTL = 10 * 60 * 1000; // 10 minutes
+const SEARCH_CACHE_MAX = 200;
+
+function getCachedSearch(key) {
+  const hit = searchCache.get(key);
+  if (!hit) return null;
+  if (Date.now() - hit.ts > SEARCH_CACHE_TTL) { searchCache.delete(key); return null; }
+  return hit.result;
+}
+function setCachedSearch(key, result) {
+  if (searchCache.size >= SEARCH_CACHE_MAX) {
+    const firstKey = searchCache.keys().next().value;
+    searchCache.delete(firstKey);
+  }
+  searchCache.set(key, { result, ts: Date.now() });
+}
+
 // ─── Multi-platform resolver ──────────────────────────────────────────────────
 // PERFORMANCE FIX: the old version retried the exact same failing URL up to 4
 // times in a row (Apple-Music check → generic URL check → 3x inside the
@@ -302,11 +339,22 @@ function waitForPlayerReady(guildId, timeoutMs = 6000) {
 //
 // Fixed version: a URL is only ever resolved ONCE. Plain search queries are
 // fired at all 3 platforms IN PARALLEL and we take whichever succeeds first
-// in priority order — this alone should noticeably cut down /play response
-// time, especially on searches (not direct links).
+// in priority order. On top of that, successful search results are now cached
+// for 10 minutes — repeat song requests ("play again", popular songs multiple
+// users ask for) return near-instantly instead of hitting the network again.
 async function resolveWithFallback(query, requesterId) {
   const isUrl = /^https?:\/\//i.test(query);
   const t0 = Date.now();
+  const cacheKey = query.toLowerCase().trim();
+
+  if (!isUrl) {
+    const cached = getCachedSearch(cacheKey);
+    if (cached) {
+      console.log(`[Resolve Timing] Cache hit for "${query}" — instant`);
+      // Deep-ish clone so per-request requester id never leaks across different users/guilds
+      return { ...cached, tracks: cached.tracks.map(t => ({ ...t, info: { ...t.info } })) };
+    }
+  }
 
   if (isUrl) {
     try {
@@ -327,6 +375,7 @@ async function resolveWithFallback(query, requesterId) {
     if (res.status === 'rejected') console.log(`[Resolve Timing] ${platforms[i]} rejected:`, res.reason?.message ?? res.reason);
     if (res.status === 'fulfilled' && res.value?.tracks?.length) {
       console.log(`✅ Found on ${platforms[i]}`);
+      setCachedSearch(cacheKey, res.value);
       return res.value;
     }
   }
@@ -393,6 +442,7 @@ function createNowPlayingContainer(player, track, disabled = false) {
   const isLooping   = player.loop && player.loop !== 'none';
   const isAutoplay  = autoplayEnabled.has(player.guildId);
   const isVoted     = votes > 0;
+  const autoPausedNote = autoPausedGuilds.has(player.guildId) ? '\n😴 *Auto-paused — VC is empty or everyone is deafened*' : '';
 
   return new ContainerBuilder()
     // ── Dark "glass" accent — near-black so the card reads as transparent black
@@ -416,7 +466,7 @@ function createNowPlayingContainer(player, track, disabled = false) {
         `${loopEmoji} Loop: \`${player.loop ?? 'none'}\`  •  ` +
         `🔊 Vol: \`${player.volume ?? 100}%\`  •  ` +
         `🎛️ Filters: ${filterStr}\n` +
-        `🙋 Requested by <@${info.requester}>`
+        `🙋 Requested by <@${info.requester}>${autoPausedNote}`
       )
     )
     .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true))
@@ -586,6 +636,30 @@ function createStatsContainer() {
     .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
 }
 
+// Combined uptime + stats card — used by both /uptime slash command and the
+// no-prefix "uptime" text trigger.
+function createUptimeContainer() {
+  const mem = (process.memoryUsage().heapUsed / 1024 / 1024).toFixed(2);
+  return new ContainerBuilder()
+    .addSectionComponents(
+      new SectionBuilder()
+        .addTextDisplayComponents(
+          new TextDisplayBuilder().setContent(
+            `## ⏱️ Uptime & Stats\n` +
+            `🕒 **Uptime:** \`${formatTime(client.uptime)}\`\n` +
+            `📶 **Ping:** \`${client.ws.ping}ms\`\n` +
+            `🏠 **Servers:** \`${client.guilds.cache.size}\`\n` +
+            `👥 **Users:** \`${client.guilds.cache.reduce((a, g) => a + g.memberCount, 0)}\`\n` +
+            `🎵 **Active Players:** \`${riffy.players?.size ?? 0}\`\n` +
+            `🧠 **Memory:** \`${mem} MB\`\n` +
+            `🔗 **Lavalink:** ${isLavalinkConnected ? '🟢 Connected' : '🔴 Disconnected'}`
+          )
+        )
+        .setThumbnailAccessory(new ThumbnailBuilder().setURL(client.user.displayAvatarURL({ size: 1024 })).setDescription('Uptime'))
+    )
+    .addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
+}
+
 function createHelpContainer() {
   return new ContainerBuilder()
     .addSectionComponents(
@@ -596,7 +670,7 @@ function createHelpContainer() {
             `Hi-Fi music from **YouTube • Spotify • SoundCloud • Apple Music**\n` +
             `Lavalink: ${isLavalinkConnected ? '🟢 Online' : '🔴 Offline'} | Made by **SKY x LIVE**\n\n` +
             `**🎵 Playback**\n` +
-            `\`/play\` \`/pause\` \`/resume\` \`/skip\` \`/stop\`\n` +
+            `\`/play\` \`/pause\` \`/resume\` \`/skip\` \`/stop\` \`/seek\`\n` +
             `\`/nowplaying\` \`/voteskip\` \`/247\` \`/autoplay\`\n\n` +
             `**📋 Queue**\n` +
             `\`/queue\` \`/shuffle\` \`/loop\` \`/clearqueue\`\n` +
@@ -608,7 +682,11 @@ function createHelpContainer() {
             `**🛡️ DJ / Admin**\n` +
             `\`/djrole\` \`/lyrics\`\n\n` +
             `**ℹ️ Utility**\n` +
-            `\`/stats\` \`/ping\` \`/invite\` \`/support\` \`/help\`\n\n` +
+            `\`/stats\` \`/uptime\` \`/ping\` \`/invite\` \`/support\` \`/help\`\n` +
+            `💬 Just type \`uptime\` in any channel — no prefix, no mention needed!\n\n` +
+            `**🤖 Auto features**\n` +
+            `Music auto-pauses when the VC is empty or everyone's deafened, and resumes` +
+            ` the moment someone joins/undeafens. Bot auto-leaves after 5 min alone (unless 24/7 is on).\n\n` +
             `💡 Paste any Spotify/Apple Music/SoundCloud link directly!`
           )
         )
@@ -800,11 +878,12 @@ riffy.on('trackStart', async (player, track) => {
   voteSkips.delete(player.guildId);
   autoReconnect.set(player.guildId, { voiceChannelId: player.voiceChannel, textChannelId: player.textChannel });
   saveSessions();
-  // Boost default volume once per session for fuller audio clarity (only if user hasn't set a custom volume yet)
-  if (!autoReconnect.get(player.guildId)?._volumeBoosted && (!player.volume || player.volume === 100)) {
+  // Boost default volume once per session for fuller audio clarity (only if user hasn't set a custom volume yet).
+  // FIXED: this flag used to live on the autoReconnect map entry, which gets fully re-created every
+  // trackStart just above — so it never actually persisted across songs. Now it's a dedicated Set.
+  if (!volumeBoostedGuilds.has(player.guildId) && (!player.volume || player.volume === 100)) {
     try { player.setVolume(130); } catch (_) {}
-    const rc = autoReconnect.get(player.guildId);
-    if (rc) rc._volumeBoosted = true;
+    volumeBoostedGuilds.add(player.guildId);
   }
   const channel = client.channels.cache.get(player.textChannel);
   if (!channel) return;
@@ -814,6 +893,10 @@ riffy.on('trackStart', async (player, track) => {
     const msg = await channel.send({ components: [createNowPlayingContainer(player, track)], flags: MessageFlags.IsComponentsV2 });
     nowPlayingMsgs.set(player.guildId, msg);
   } catch (e) { console.error('[trackStart]', e.message); }
+
+  // Right after a track starts, immediately check the VC — covers the case where the
+  // queue was started with nobody in the channel (e.g. via 24/7 or a stale queue).
+  reevaluateVCPause(player.guildId).catch(() => {});
 });
 
 riffy.on('trackError', (player, track, error) => { console.error(`[trackError] ${track?.info?.title}:`, error?.message ?? error); try { player.stop(); } catch (_) {} });
@@ -872,6 +955,7 @@ client.on('clientReady', async () => {
     { name: 'resume',     description: 'Resume paused playback' },
     { name: 'skip',       description: 'Skip the current song' },
     { name: 'previous',   description: 'Play the previous song' },
+    { name: 'seek',       description: 'Seek to a specific time in the current track', options: [{ name: 'time', description: 'Time e.g. 1:30 or 90 (seconds)', type: 3, required: true }] },
     { name: 'voteskip',   description: 'Vote to skip (50% of VC required)' },
     { name: 'stop',       description: 'Stop player and clear queue' },
     { name: 'volume',     description: 'Set volume (1–150)', options: [{ name: 'level', description: 'Volume level', type: 4, required: true, min_value: 1, max_value: 150 }] },
@@ -890,6 +974,7 @@ client.on('clientReady', async () => {
     { name: 'history',    description: 'Show recently played songs' },
     { name: 'djrole',     description: 'Set/remove DJ role (Admin only)', options: [{ name: 'role', description: 'DJ role (empty to remove)', type: 8, required: false }] },
     { name: 'stats',      description: 'Show bot statistics' },
+    { name: 'uptime',     description: 'Show bot uptime and stats' },
     { name: 'ping',       description: 'Show bot latency' },
     { name: 'invite',     description: 'Get bot invite link' },
     { name: 'support',    description: 'Get support server link' },
@@ -993,7 +1078,9 @@ client.on('guildDelete', async (guild) => {
   nowPlayingMsgs.delete(guild.id); songHistory.delete(guild.id); voteSkips.delete(guild.id);
   activeFilters.delete(guild.id); autoReconnect.delete(guild.id);
   autoplayOwner.delete(guild.id); autoplayAutoDisabled.delete(guild.id);
-  deafenAutoPaused.delete(guild.id); intentionalDisconnects.delete(guild.id);
+  autoPausedGuilds.delete(guild.id); volumeBoostedGuilds.delete(guild.id);
+  intentionalDisconnects.delete(guild.id);
+  if (emptyVCTimers.has(guild.id)) { clearTimeout(emptyVCTimers.get(guild.id)); emptyVCTimers.delete(guild.id); }
   saveSessions();
   const p = riffy.players.get(guild.id);
   if (p) { try { p.destroy(); } catch (_) {} }
@@ -1001,34 +1088,63 @@ client.on('guildDelete', async (guild) => {
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
-//  VOICE STATE UPDATE — kick-reconnect, deafen auto-pause, autoplay owner tracking
+//  VOICE STATE UPDATE — kick-reconnect, empty-VC / deafen auto-pause+resume,
+//  auto-leave when alone, autoplay owner tracking
 // ══════════════════════════════════════════════════════════════════════════════
 
-// Re-checks everyone in a player's VC and pauses/resumes based on deafen status.
-// Rule: pause ONLY if every human in the channel is self-deafened. Mute is ignored.
-async function reevaluateDeafenPause(guildId) {
+// Re-checks everyone in a player's VC and pauses/resumes based on who's actually
+// there and listening. Rule: pause if the VC has zero humans OR every human in it
+// is self-deafened. Resume the moment either condition stops being true. Mute
+// (not deafen) is ignored — someone muted but undeafened can still hear the bot.
+// Also starts/clears a 5-minute "nobody's here" timer that makes the bot leave
+// on its own to save resources — skipped entirely while 24/7 mode is on.
+async function reevaluateVCPause(guildId) {
   const player = riffy.players.get(guildId);
-  if (!player || !player.current) return;
+  if (!player) return;
   const guild = client.guilds.cache.get(guildId);
   if (!guild) return;
   const vc = guild.channels.cache.get(player.voiceChannel);
   if (!vc) return;
 
   const humans = vc.members.filter(m => !m.user.bot);
-  if (humans.size === 0) return; // nobody to listen — leave as-is (24/7 / queue logic handles empty VC elsewhere)
+  const isEmpty = humans.size === 0;
+  const shouldPause = isEmpty || humans.every(m => m.voice?.selfDeaf);
 
-  const allDeafened = humans.every(m => m.voice?.selfDeaf);
+  if (player.current) {
+    if (shouldPause && !player.paused) {
+      try { await player.pause(true); } catch (_) {}
+      autoPausedGuilds.add(guildId);
+      const nm = nowPlayingMsgs.get(guildId);
+      if (nm) await nm.edit({ components: [createNowPlayingContainer(player, player.current)], flags: MessageFlags.IsComponentsV2 }).catch(() => {});
+    } else if (!shouldPause && autoPausedGuilds.has(guildId)) {
+      autoPausedGuilds.delete(guildId);
+      try { await player.pause(false); } catch (_) {}
+      const nm = nowPlayingMsgs.get(guildId);
+      if (nm) await nm.edit({ components: [createNowPlayingContainer(player, player.current)], flags: MessageFlags.IsComponentsV2 }).catch(() => {});
+    }
+  }
 
-  if (allDeafened && !player.paused) {
-    try { await player.pause(true); } catch (_) {}
-    deafenAutoPaused.add(guildId);
-    const nm = nowPlayingMsgs.get(guildId);
-    if (nm) await nm.edit({ components: [createNowPlayingContainer(player, player.current)], flags: MessageFlags.IsComponentsV2 }).catch(() => {});
-  } else if (!allDeafened && deafenAutoPaused.has(guildId)) {
-    deafenAutoPaused.delete(guildId);
-    try { await player.pause(false); } catch (_) {}
-    const nm = nowPlayingMsgs.get(guildId);
-    if (nm) await nm.edit({ components: [createNowPlayingContainer(player, player.current)], flags: MessageFlags.IsComponentsV2 }).catch(() => {});
+  // Auto-leave after being alone for a while — skipped if 24/7 mode is on for this guild.
+  if (isEmpty && !queue247.has(guildId)) {
+    if (!emptyVCTimers.has(guildId)) {
+      const timer = setTimeout(async () => {
+        emptyVCTimers.delete(guildId);
+        const p = riffy.players.get(guildId);
+        const g = client.guilds.cache.get(guildId);
+        if (!p || !g) return;
+        const vcNow = g.channels.cache.get(p.voiceChannel);
+        const stillEmpty = !vcNow || vcNow.members.filter(m => !m.user.bot).size === 0;
+        if (!stillEmpty || queue247.has(guildId)) return;
+        const textCh = g.channels.cache.get(p.textChannel);
+        if (textCh) await textCh.send({ components: [createSimpleContainer('Left — Empty VC', 'Nobody was around for 5 minutes, so I left. Use `/play` to bring me back!', '👋')], flags: MessageFlags.IsComponentsV2 }).catch(() => {});
+        nowPlayingMsgs.delete(guildId); activeFilters.delete(guildId);
+        intentionalDestroy(guildId, p);
+      }, EMPTY_VC_LEAVE_MS);
+      emptyVCTimers.set(guildId, timer);
+    }
+  } else if (emptyVCTimers.has(guildId)) {
+    clearTimeout(emptyVCTimers.get(guildId));
+    emptyVCTimers.delete(guildId);
   }
 }
 
@@ -1048,14 +1164,16 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
     return;
   }
 
-  if (!player || !player.current) return;
+  if (!player) return;
 
   // Only react to changes involving the bot's own voice channel
   const involvesPlayerVC = oldState.channelId === player.voiceChannel || newState.channelId === player.voiceChannel;
   if (!involvesPlayerVC) return;
 
-  // ── 2) Deafen-based auto-pause/resume ──
-  await reevaluateDeafenPause(guildId);
+  // ── 2) Empty-VC / deafen based auto-pause+resume, and auto-leave timer ──
+  await reevaluateVCPause(guildId);
+
+  if (!player.current) return;
 
   // ── 3) Autoplay tied to the user who enabled it ──
   const owner = autoplayOwner.get(guildId);
@@ -1121,6 +1239,7 @@ client.on('interactionCreate', async (interaction) => {
         case 'pause': case 'resume': {
           const pause = interaction.customId === 'pause';
           await player.pause(pause);
+          autoPausedGuilds.delete(player.guildId); // manual control overrides the auto-pause tracker
           const nm = nowPlayingMsgs.get(player.guildId);
           if (nm && player.current) await nm.edit({ components: [createNowPlayingContainer(player, player.current)], flags: MessageFlags.IsComponentsV2 }).catch(() => {});
           await interaction.reply({ content: pause ? '⏸️ Paused' : '▶️ Resumed', flags: MessageFlags.Ephemeral });
@@ -1220,6 +1339,7 @@ client.on('interactionCreate', async (interaction) => {
     : commandName === 'filter' ? options.getString('name')
     : commandName === 'volume' ? `${options.getInteger('level')}%`
     : commandName === 'loop' ? options.getString('mode')
+    : commandName === 'seek' ? options.getString('time')
     : '';
   logCommandUsage({
     source: 'Slash', commandName: `/${commandName}`, user: interaction.user,
@@ -1236,7 +1356,7 @@ client.on('interactionCreate', async (interaction) => {
     return p;
   };
 
-  const djCmds = ['skip', 'previous', 'stop', 'shuffle', 'loop', 'volume', 'remove', 'move', 'clearqueue', 'filter', 'clearfilters'];
+  const djCmds = ['skip', 'previous', 'stop', 'shuffle', 'loop', 'volume', 'remove', 'move', 'clearqueue', 'filter', 'clearfilters', 'seek'];
   if (djCmds.includes(commandName) && !hasDJPermission(member, guild.id))
     return interaction.reply({ content: `❌ DJ role required for \`/${commandName}\``, flags: MessageFlags.Ephemeral });
 
@@ -1264,12 +1384,14 @@ client.on('interactionCreate', async (interaction) => {
     else if (commandName === 'pause') {
       const p = getPlayer(); if (!p) return;
       await p.pause(true);
+      autoPausedGuilds.delete(guild.id);
       await interaction.reply({ components: [createSimpleContainer('Paused', 'Playback paused', '⏸️')], flags: MessageFlags.IsComponentsV2 });
     }
 
     else if (commandName === 'resume') {
       const p = getPlayer(); if (!p) return;
       await p.pause(false);
+      autoPausedGuilds.delete(guild.id);
       await interaction.reply({ components: [createSimpleContainer('Resumed', 'Playback resumed', '▶️')], flags: MessageFlags.IsComponentsV2 });
     }
 
@@ -1277,6 +1399,26 @@ client.on('interactionCreate', async (interaction) => {
       const p = getPlayer(); if (!p) return;
       p.stop();
       await interaction.reply({ components: [createSimpleContainer('Skipped', 'Skipped to next track', '⏭️')], flags: MessageFlags.IsComponentsV2 });
+    }
+
+    else if (commandName === 'seek') {
+      const p = getPlayer(); if (!p) return;
+      if (!p.current) return interaction.reply({ content: '❌ Nothing playing', flags: MessageFlags.Ephemeral });
+      const raw = options.getString('time').trim();
+      let ms;
+      if (raw.includes(':')) {
+        const parts = raw.split(':').map(Number);
+        if (parts.some(isNaN)) return interaction.reply({ content: '❌ Invalid time format. Use `mm:ss` or plain seconds.', flags: MessageFlags.Ephemeral });
+        ms = parts.reduceRight((acc, val, i, arr) => acc + val * Math.pow(60, arr.length - 1 - i), 0) * 1000;
+      } else {
+        const secs = Number(raw);
+        if (isNaN(secs)) return interaction.reply({ content: '❌ Invalid time. Use plain seconds or `mm:ss`.', flags: MessageFlags.Ephemeral });
+        ms = secs * 1000;
+      }
+      if (ms < 0) return interaction.reply({ content: '❌ Time can\'t be negative.', flags: MessageFlags.Ephemeral });
+      if (p.current.info.length && ms > p.current.info.length) return interaction.reply({ content: '❌ That\'s beyond the track length.', flags: MessageFlags.Ephemeral });
+      try { await p.seek(ms); } catch (e) { return interaction.reply({ content: `❌ Seek failed: ${e.message}`, flags: MessageFlags.Ephemeral }); }
+      await interaction.reply({ components: [createSimpleContainer('Seeked', `Jumped to **${formatTime(ms)}**`, '⏩')], flags: MessageFlags.IsComponentsV2 });
     }
 
     else if (commandName === 'voteskip') {
@@ -1362,6 +1504,7 @@ client.on('interactionCreate', async (interaction) => {
         await interaction.reply({ components: [createSimpleContainer('24/7 Disabled', 'Bot will leave when queue ends', '✅')], flags: MessageFlags.IsComponentsV2 });
       } else {
         queue247.add(guild.id);
+        if (emptyVCTimers.has(guild.id)) { clearTimeout(emptyVCTimers.get(guild.id)); emptyVCTimers.delete(guild.id); }
         if (!riffy.players.get(guild.id)) riffy.createConnection({ guildId: guild.id, voiceChannel: member.voice.channel.id, textChannel: channel.id, deaf: true });
         await interaction.reply({ components: [createSimpleContainer('24/7 Enabled', 'Bot will stay in VC forever', '✅')], flags: MessageFlags.IsComponentsV2 });
       }
@@ -1421,8 +1564,9 @@ client.on('interactionCreate', async (interaction) => {
       else { djRoles.delete(guild.id); await interaction.reply({ components: [createSimpleContainer('DJ Role Removed', 'Everyone can control music now', '🛡️')], flags: MessageFlags.IsComponentsV2 }); }
     }
 
-    else if (commandName === 'stats') { await interaction.reply({ components: [createStatsContainer()], flags: MessageFlags.IsComponentsV2 }); }
-    else if (commandName === 'ping')  { await interaction.reply({ components: [createSimpleContainer('Pong! 🏓', `WebSocket: **${client.ws.ping}ms**`, '📶')], flags: MessageFlags.IsComponentsV2 }); }
+    else if (commandName === 'stats')  { await interaction.reply({ components: [createStatsContainer()], flags: MessageFlags.IsComponentsV2 }); }
+    else if (commandName === 'uptime') { await interaction.reply({ components: [createUptimeContainer()], flags: MessageFlags.IsComponentsV2 }); }
+    else if (commandName === 'ping')   { await interaction.reply({ components: [createSimpleContainer('Pong! 🏓', `WebSocket: **${client.ws.ping}ms**`, '📶')], flags: MessageFlags.IsComponentsV2 }); }
 
     else if (commandName === 'invite') {
       const url = `https://discord.com/api/oauth2/authorize?client_id=${client.user.id}&permissions=3165184&scope=bot%20applications.commands`;
@@ -1444,11 +1588,22 @@ client.on('interactionCreate', async (interaction) => {
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
-//  MENTION COMMANDS  @BOT <command>
+//  MENTION COMMANDS  @BOT <command>  +  NO-PREFIX "uptime"
 // ══════════════════════════════════════════════════════════════════════════════
 
 client.on('messageCreate', async (message) => {
   if (message.author.bot || !message.guild) return;
+
+  // ── No-prefix "uptime" — works in ANY text channel or VC chat, no mention needed ──
+  const plainContent = message.content.trim().toLowerCase();
+  if (plainContent === 'uptime' || plainContent === 'up') {
+    logCommandUsage({
+      source: 'No-Prefix', commandName: 'uptime',
+      user: message.author, guild: message.guild, channel: message.channel
+    });
+    return message.reply({ components: [createUptimeContainer()], flags: MessageFlags.IsComponentsV2 }).catch(() => {});
+  }
+
   const mentionRx = new RegExp(`^<@!?${client.user.id}>\\s*`);
   if (!mentionRx.test(message.content.trim())) return;
   const args    = message.content.trim().replace(mentionRx, '').trim().split(/\s+/);
@@ -1503,6 +1658,7 @@ client.on('messageCreate', async (message) => {
       const p = riffy.players.get(message.guild.id);
       if (!p?.current) return reply('Error', 'Nothing playing.', '❌');
       await p.pause(true);
+      autoPausedGuilds.delete(message.guild.id);
       return reply('Paused', 'Paused ⏸️');
     }
 
@@ -1510,6 +1666,7 @@ client.on('messageCreate', async (message) => {
       const p = riffy.players.get(message.guild.id);
       if (!p) return reply('Error', 'Nothing playing.', '❌');
       await p.pause(false);
+      autoPausedGuilds.delete(message.guild.id);
       return reply('Resumed', 'Resumed ▶️');
     }
 
@@ -1532,6 +1689,10 @@ client.on('messageCreate', async (message) => {
       const p = riffy.players.get(message.guild.id);
       if (!p) return reply('Error', 'Nothing playing.', '❌');
       return message.reply({ components: [createQueueContainer(p)], flags: MessageFlags.IsComponentsV2 }).catch(() => {});
+    }
+
+    if (command === 'uptime') {
+      return message.reply({ components: [createUptimeContainer()], flags: MessageFlags.IsComponentsV2 }).catch(() => {});
     }
 
     if (command === 'play' || command === 'p' || !command) {
@@ -1564,6 +1725,7 @@ client.on('messageCreate', async (message) => {
           `**@${client.user.username} stop** — Stop\n` +
           `**@${client.user.username} np** — Now Playing\n` +
           `**@${client.user.username} queue** — Queue\n\n` +
+          `💬 Just type \`uptime\` (no mention needed) anywhere for bot uptime + stats!\n\n` +
           `💡 Use \`/help\` for all slash commands!`, 'ℹ️')],
         flags: MessageFlags.IsComponentsV2
       }).catch(() => {});
