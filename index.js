@@ -1,11 +1,12 @@
 // ╔══════════════════════════════════════════════════════════════════════╗
-// ║              SKY x MUSIC BOT — index.js  v3.2                      ║
+// ║              SKY x MUSIC BOT — index.js  v3.3                      ║
 // ║  Platforms : YouTube · Spotify · SoundCloud · Apple Music          ║
 // ║  Audio     : Hi-Fi Opus · 15+ Filters · 8D · Bass · Nightcore      ║
 // ║  Features  : Queue · Loop · Shuffle · 24/7 · Autoplay              ║
 // ║              DJ Role · Vote Skip · Lyrics · History · Previous      ║
 // ║              Empty-VC Auto-Pause/Resume · Auto-Leave · Seek         ║
 // ║              No-prefix "uptime" · Search cache (faster /play)       ║
+// ║              /restart + @bot restart (Admin only, PM2 auto-restart) ║
 // ║  UI        : Components V2 — Clean & Modern                         ║
 // ╚══════════════════════════════════════════════════════════════════════╝
 
@@ -330,18 +331,6 @@ function setCachedSearch(key, result) {
 }
 
 // ─── Multi-platform resolver ──────────────────────────────────────────────────
-// PERFORMANCE FIX: the old version retried the exact same failing URL up to 4
-// times in a row (Apple-Music check → generic URL check → 3x inside the
-// fallback loop, since `isUrl ? query : ...` just re-sent the same URL again).
-// That alone could make a bad/slow link take 4x as long to fail. It also tried
-// ytmsearch → ytsearch → scsearch one at a time (each a full network
-// round-trip), so if the first one was slow, everything behind it waited too.
-//
-// Fixed version: a URL is only ever resolved ONCE. Plain search queries are
-// fired at all 3 platforms IN PARALLEL and we take whichever succeeds first
-// in priority order. On top of that, successful search results are now cached
-// for 10 minutes — repeat song requests ("play again", popular songs multiple
-// users ask for) return near-instantly instead of hitting the network again.
 async function resolveWithFallback(query, requesterId) {
   const isUrl = /^https?:\/\//i.test(query);
   const t0 = Date.now();
@@ -680,7 +669,7 @@ function createHelpContainer() {
             `\`8d\` \`slowedreverb\` \`karaoke\` \`chipmunk\` \`vibrato\` \`tremolo\` …\n` +
             `\`/clearfilters\` — Remove all effects\n\n` +
             `**🛡️ DJ / Admin**\n` +
-            `\`/djrole\` \`/lyrics\`\n\n` +
+            `\`/djrole\` \`/lyrics\` \`/restart\`\n\n` +
             `**ℹ️ Utility**\n` +
             `\`/stats\` \`/uptime\` \`/ping\` \`/invite\` \`/support\` \`/help\`\n` +
             `💬 Just type \`uptime\` in any channel — no prefix, no mention needed!\n\n` +
@@ -973,6 +962,7 @@ client.on('clientReady', async () => {
     { name: 'lyrics',     description: 'Get lyrics', options: [{ name: 'query', description: 'Song name (empty = current)', type: 3, required: false }] },
     { name: 'history',    description: 'Show recently played songs' },
     { name: 'djrole',     description: 'Set/remove DJ role (Admin only)', options: [{ name: 'role', description: 'DJ role (empty to remove)', type: 8, required: false }] },
+    { name: 'restart',    description: 'Restart the bot (Admin only)' },
     { name: 'stats',      description: 'Show bot statistics' },
     { name: 'uptime',     description: 'Show bot uptime and stats' },
     { name: 'ping',       description: 'Show bot latency' },
@@ -1564,6 +1554,15 @@ client.on('interactionCreate', async (interaction) => {
       else { djRoles.delete(guild.id); await interaction.reply({ components: [createSimpleContainer('DJ Role Removed', 'Everyone can control music now', '🛡️')], flags: MessageFlags.IsComponentsV2 }); }
     }
 
+    // ── /restart — Admin only. Exits the process; PM2 (autorestart: true) brings it back up. ──
+    else if (commandName === 'restart') {
+      if (!member.permissions.has('Administrator')) return interaction.reply({ content: '❌ Admin only', flags: MessageFlags.Ephemeral });
+      await interaction.reply({ components: [createSimpleContainer('Restarting...', 'Bot is restarting now, back online in a few seconds 🔄', '🔄')], flags: MessageFlags.IsComponentsV2 });
+      console.log(`🔄 Restart requested by ${interaction.user.tag} (${interaction.user.id}) in guild ${guild?.id ?? 'DM'}`);
+      saveSessions();
+      setTimeout(() => process.exit(0), 1000);
+    }
+
     else if (commandName === 'stats')  { await interaction.reply({ components: [createStatsContainer()], flags: MessageFlags.IsComponentsV2 }); }
     else if (commandName === 'uptime') { await interaction.reply({ components: [createUptimeContainer()], flags: MessageFlags.IsComponentsV2 }); }
     else if (commandName === 'ping')   { await interaction.reply({ components: [createSimpleContainer('Pong! 🏓', `WebSocket: **${client.ws.ping}ms**`, '📶')], flags: MessageFlags.IsComponentsV2 }); }
@@ -1695,6 +1694,16 @@ client.on('messageCreate', async (message) => {
       return message.reply({ components: [createUptimeContainer()], flags: MessageFlags.IsComponentsV2 }).catch(() => {});
     }
 
+    // ── @bot restart — Admin only. Exits the process; PM2 (autorestart: true) brings it back up. ──
+    if (command === 'restart') {
+      if (!message.member.permissions.has('Administrator')) return reply('Error', 'Admin only!', '❌');
+      await reply('Restarting...', 'Bot is restarting now, back online in a few seconds 🔄', '🔄');
+      console.log(`🔄 Restart requested by ${message.author.tag} (${message.author.id}) in guild ${message.guild.id}`);
+      saveSessions();
+      setTimeout(() => process.exit(0), 1000);
+      return;
+    }
+
     if (command === 'play' || command === 'p' || !command) {
       const query = rest || (command !== 'play' && command !== 'p' ? args.join(' ') : '');
       if (!query) return reply('Usage', `\`@${client.user.username} play <song name or URL>\``, 'ℹ️');
@@ -1724,7 +1733,8 @@ client.on('messageCreate', async (message) => {
           `**@${client.user.username} resume** — Resume\n` +
           `**@${client.user.username} stop** — Stop\n` +
           `**@${client.user.username} np** — Now Playing\n` +
-          `**@${client.user.username} queue** — Queue\n\n` +
+          `**@${client.user.username} queue** — Queue\n` +
+          `**@${client.user.username} restart** — Restart bot (Admin only)\n\n` +
           `💬 Just type \`uptime\` (no mention needed) anywhere for bot uptime + stats!\n\n` +
           `💡 Use \`/help\` for all slash commands!`, 'ℹ️')],
         flags: MessageFlags.IsComponentsV2
